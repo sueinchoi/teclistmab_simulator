@@ -4,7 +4,7 @@
 # Individual PK parameter calculation based on patient characteristics
 # 2-Compartment model with time-dependent clearance
 # Monte Carlo simulation with inter-individual variability (IIV)
-# CRS Risk Assessment
+# CRS Risk Assessment based on Cavg
 #
 # Reference: Miao et al. (2023) - Teclistamab Population PK Model
 #===============================================================================
@@ -263,24 +263,47 @@ calculate_nca_summary <- function(all_sim_data, day_stepup2) {
 }
 
 #-------------------------------------------------------------------------------
-# Calculate Cmax up to specific time point
+# Calculate Cavg up to specific time point (AUC / time)
 #-------------------------------------------------------------------------------
 
-calculate_cmax_up_to_time <- function(sim_data, end_hour) {
-  # Calculate Cmax from time 0 up to end_hour for each subject
+calculate_cavg_up_to_time <- function(sim_data, end_hour) {
+  # Calculate Cavg from time 0 up to end_hour for each subject
+  # Cavg = AUC(0-t) / t
   # TIME_HOUR is the internal simulation time (0-based)
-  cmax_data <- sim_data %>%
+
+  cavg_data <- sim_data %>%
     filter(TIME_HOUR >= 0 & TIME_HOUR <= end_hour) %>%
     group_by(ID) %>%
-    summarise(Cmax = max(DV), .groups = "drop")
+    arrange(TIME_HOUR) %>%
+    summarise(
+      # Calculate AUC using trapezoidal rule
+      AUC = {
+        auc <- 0
+        dv <- DV
+        th <- TIME_HOUR
+        for (i in 2:length(dv)) {
+          dt <- (th[i] - th[i-1]) / 24  # Convert to days
+          avg_c <- (dv[i] + dv[i-1]) / 2
+          auc <- auc + dt * avg_c
+        }
+        auc
+      },
+      Cmax = max(DV),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      Cavg = AUC / (end_hour / 24)  # Cavg = AUC / time in days
+    )
 
-  if (nrow(cmax_data) == 0) return(list(mean = NA, median = NA, q5 = NA, q95 = NA))
+  if (nrow(cavg_data) == 0) return(list(mean = NA, median = NA, q5 = NA, q95 = NA, cmax_mean = NA, cmax_median = NA))
 
   list(
-    mean = mean(cmax_data$Cmax, na.rm = TRUE),
-    median = median(cmax_data$Cmax, na.rm = TRUE),
-    q5 = quantile(cmax_data$Cmax, 0.05, na.rm = TRUE),
-    q95 = quantile(cmax_data$Cmax, 0.95, na.rm = TRUE)
+    mean = mean(cavg_data$Cavg, na.rm = TRUE),
+    median = median(cavg_data$Cavg, na.rm = TRUE),
+    q5 = quantile(cavg_data$Cavg, 0.05, na.rm = TRUE),
+    q95 = quantile(cavg_data$Cavg, 0.95, na.rm = TRUE),
+    cmax_mean = mean(cavg_data$Cmax, na.rm = TRUE),
+    cmax_median = median(cavg_data$Cmax, na.rm = TRUE)
   )
 }
 
@@ -335,6 +358,13 @@ ui <- fluidPage(
         border: 2px solid #28a745;
         margin-bottom: 20px;
       }
+      .info-box {
+        background-color: #cce5ff;
+        border-radius: 10px;
+        padding: 15px;
+        border: 2px solid #004085;
+        margin-bottom: 20px;
+      }
       .btn-simulate {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         border: none;
@@ -362,13 +392,17 @@ ui <- fluidPage(
         background-color: #d4edda;
         border-left: 4px solid #28a745;
       }
+      .crs-info {
+        background-color: #cce5ff;
+        border-left: 4px solid #004085;
+      }
     "))
   ),
 
   # Header
   div(class = "main-header",
       h1("Teclistamab PK Simulator", style = "margin: 0;"),
-      p("Monte Carlo Simulation with CRS Risk Assessment", style = "margin: 5px 0 0 0; opacity: 0.9;")
+      p("Monte Carlo Simulation with CRS Risk Assessment (Cavg-based)", style = "margin: 5px 0 0 0; opacity: 0.9;")
   ),
 
   # Main Layout
@@ -380,7 +414,8 @@ ui <- fluidPage(
                hr(),
                numericInput("bw", "Body Weight (kg):", value = 70, min = 30, max = 150, step = 0.1),
                selectInput("iss", "ISS Stage:", choices = c("I", "II", "III"), selected = "II"),
-               selectInput("igg_type", "Immunoglobulin Type:", choices = c("IgG", "Non-IgG"), selected = "IgG")
+               selectInput("igg_type", "Immunoglobulin Type:", choices = c("IgG", "Non-IgG"), selected = "IgG"),
+               selectInput("ecog", "ECOG Performance Status:", choices = c("0", "1", "2", "3", "4"), selected = "1")
            ),
 
            div(class = "param-box",
@@ -435,11 +470,11 @@ ui <- fluidPage(
                plotOutput("pk_plot", height = "450px")
            ),
 
-           # Cmax at specific timepoints
+           # Cavg at specific timepoints
            div(class = "result-box",
-               h4(icon("crosshairs"), " Concentration at Key Timepoints"),
+               h4(icon("crosshairs"), " Cavg at Key Timepoints (CRS Risk Metrics)"),
                hr(),
-               tableOutput("cmax_table")
+               tableOutput("cavg_table")
            ),
 
            # NCA Parameters (First Dose)
@@ -601,20 +636,21 @@ server <- function(input, output, session) {
         dose_type = c("Step-up 1", "Step-up 2", rep("Treatment", input$n_treatment_doses))
       )
 
-      # Calculate Cmax up to Day 3 (72hr) and Day 5 (120hr)
-      # Day 3 Cmax = maximum concentration from 0 to 72 hours
-      # Day 5 Cmax = maximum concentration from 0 to 120 hours
-      cmax_day3 <- calculate_cmax_up_to_time(all_results, 72)   # Cmax from 0 to 72hr
-      cmax_day5 <- calculate_cmax_up_to_time(all_results, 120)  # Cmax from 0 to 120hr
+      # Calculate Cavg up to Day 3 (72hr) and Day 5 (120hr)
+      # Day 3 Cavg = AUC(0-72hr) / 3 days
+      # Day 5 Cavg = AUC(0-120hr) / 5 days
+      cavg_day3 <- calculate_cavg_up_to_time(all_results, 72)   # Cavg from 0 to 72hr
+      cavg_day5 <- calculate_cavg_up_to_time(all_results, 120)  # Cavg from 0 to 120hr
 
       list(
         simulation = all_results,
         dosing_info = dosing_info,
         ind_params = ind_params,
         typical_params = params_typical,
-        cmax_day3 = cmax_day3,
-        cmax_day5 = cmax_day5,
-        bw = bw
+        cavg_day3 = cavg_day3,
+        cavg_day5 = cavg_day5,
+        bw = bw,
+        ecog = input$ecog
       )
     })
   })
@@ -625,39 +661,69 @@ server <- function(input, output, session) {
     result <- sim_result()
     if (is.null(result)) return(NULL)
 
-    bw <- result$bw
-    cmax_day3 <- result$cmax_day3$median
-    cmax_day5 <- result$cmax_day5$median
+    cavg_day3 <- result$cavg_day3$median
+    cavg_day5 <- result$cavg_day5$median
+    ecog <- result$ecog
 
     warnings <- list()
+    infos <- list()
 
-    # Check Day 5 Cmax > 1.0
-    if (!is.na(cmax_day5) && cmax_day5 > 1.0) {
+    # Check Day 3 Cavg >= 0.18 (CRS Grade II risk)
+    if (!is.na(cavg_day3) && cavg_day3 >= 0.18) {
       warnings <- c(warnings, list(
         div(class = "crs-metric crs-danger",
             icon("exclamation-triangle"),
-            strong(" CRS 위험 주의! "),
-            sprintf("Day 5 Cmax (%.3f mg/L) > 1.0 mg/L", cmax_day5)
+            strong(" CRS Grade II 위험 높음! "),
+            sprintf("Day 3 Cavg (%.4f µg/mL) ≥ 0.18 µg/mL", cavg_day3)
+        )
+      ))
+    } else if (!is.na(cavg_day3)) {
+      infos <- c(infos, list(
+        div(class = "crs-metric crs-safe",
+            icon("check"),
+            sprintf(" Day 3 Cavg (%.4f µg/mL) < 0.18 µg/mL - 정상 범위", cavg_day3)
         )
       ))
     }
 
-    # Check BW >= 65 and Day 3 Cmax > 0.5
-    if (bw >= 65 && !is.na(cmax_day3) && cmax_day3 > 0.5) {
-      warnings <- c(warnings, list(
-        div(class = "crs-metric crs-danger",
-            icon("exclamation-circle"),
-            strong(" CRS Grade 2 매우 주의! "),
-            sprintf("BW (%.1f kg) ≥ 65 AND Day 3 Cmax (%.3f mg/L) > 0.5 mg/L", bw, cmax_day3)
-        )
-      ))
-    } else if (bw >= 65) {
-      # Check BW >= 65 only
+    # Check Day 5 Cavg
+    if (!is.na(cavg_day5)) {
+      if (cavg_day5 < 0.32) {
+        # Low efficacy warning
+        warnings <- c(warnings, list(
+          div(class = "crs-metric crs-warning",
+              icon("exclamation-circle"),
+              strong(" Efficacy 저하 우려 "),
+              sprintf("Day 5 Cavg (%.4f µg/mL) < 0.32 µg/mL", cavg_day5)
+          )
+        ))
+      } else if (cavg_day5 > 0.45) {
+        # CRS risk warning
+        warnings <- c(warnings, list(
+          div(class = "crs-metric crs-danger",
+              icon("exclamation-triangle"),
+              strong(" CRS 위험 높음! "),
+              sprintf("Day 5 Cavg (%.4f µg/mL) > 0.45 µg/mL", cavg_day5)
+          )
+        ))
+      } else {
+        # Optimal range
+        infos <- c(infos, list(
+          div(class = "crs-metric crs-safe",
+              icon("check-circle"),
+              strong(" Optimal 범위! "),
+              sprintf("Day 5 Cavg (%.4f µg/mL) ∈ [0.32 - 0.45] µg/mL", cavg_day5)
+          )
+        ))
+      }
+    }
+
+    # ECOG status info
+    if (ecog %in% c("2", "3", "4")) {
       warnings <- c(warnings, list(
         div(class = "crs-metric crs-warning",
-            icon("exclamation-triangle"),
-            strong(" CRS Grade 2 위험 주의 "),
-            sprintf("BW (%.1f kg) ≥ 65 kg", bw)
+            icon("user-injured"),
+            sprintf(" ECOG %s: 환자 상태 고려 필요", ecog)
         )
       ))
     }
@@ -666,44 +732,47 @@ server <- function(input, output, session) {
       div(class = "success-box",
           h4(icon("check-circle"), " CRS Risk Assessment"),
           hr(),
+          infos,
           div(class = "crs-metric crs-safe",
-              icon("check"),
-              " 주요 CRS 위험 지표 정상 범위"
+              icon("thumbs-up"),
+              " 모든 CRS 위험 지표 정상 범위"
           )
       )
     } else {
       div(class = "danger-box",
           h4(icon("exclamation-triangle"), " CRS Risk Assessment"),
           hr(),
-          warnings
+          warnings,
+          if (length(infos) > 0) infos
       )
     }
   })
 
-  # Cmax at specific timepoints table
-  output$cmax_table <- renderTable({
+  # Cavg at specific timepoints table
+  output$cavg_table <- renderTable({
     if (is.null(input$simulate) || input$simulate == 0) return(NULL)
     result <- sim_result()
     if (is.null(result)) return(NULL)
 
-    cmax_day3 <- result$cmax_day3
-    cmax_day5 <- result$cmax_day5
+    cavg_day3 <- result$cavg_day3
+    cavg_day5 <- result$cavg_day5
 
     data.frame(
-      Parameter = c("Day 3 Cmax (0-72 hr)", "Day 5 Cmax (0-120 hr)"),
-      `Median (mg/L)` = c(
-        sprintf("%.4f", cmax_day3$median),
-        sprintf("%.4f", cmax_day5$median)
+      Parameter = c("Day 3 Cavg (0-72 hr)", "Day 5 Cavg (0-120 hr)"),
+      `Median (µg/mL)` = c(
+        sprintf("%.4f", cavg_day3$median),
+        sprintf("%.4f", cavg_day5$median)
       ),
-      `Mean (mg/L)` = c(
-        sprintf("%.4f", cmax_day3$mean),
-        sprintf("%.4f", cmax_day5$mean)
+      `Mean (µg/mL)` = c(
+        sprintf("%.4f", cavg_day3$mean),
+        sprintf("%.4f", cavg_day5$mean)
       ),
       `90% PI` = c(
-        sprintf("[%.4f - %.4f]", cmax_day3$q5, cmax_day3$q95),
-        sprintf("[%.4f - %.4f]", cmax_day5$q5, cmax_day5$q95)
+        sprintf("[%.4f - %.4f]", cavg_day3$q5, cavg_day3$q95),
+        sprintf("[%.4f - %.4f]", cavg_day5$q5, cavg_day5$q95)
       ),
-      `CRS Threshold` = c("0.5 mg/L (with BW≥65)", "1.0 mg/L"),
+      `Optimal Range` = c("< 0.18 µg/mL", "0.32 - 0.45 µg/mL"),
+      `Risk` = c("≥0.18: CRS Gr.II↑", "<0.32: Efficacy↓, >0.45: CRS↑"),
       check.names = FALSE
     )
   }, striped = TRUE, hover = TRUE, bordered = TRUE, width = "100%")
@@ -753,32 +822,35 @@ server <- function(input, output, session) {
                  aes(xintercept = time_plot, color = dose_type),
                  linetype = "dashed", alpha = 0.7) +
       # Day 3 and Day 5 markers
-      geom_vline(xintercept = 2, linetype = "dotted", color = "orange", linewidth = 0.8) +
-      geom_vline(xintercept = 4, linetype = "dotted", color = "red", linewidth = 0.8) +
-      annotate("text", x = 2.2, y = 0.002, label = "Day 3", color = "orange", hjust = 0, size = 3) +
-      annotate("text", x = 4.2, y = 0.002, label = "Day 5", color = "red", hjust = 0, size = 3) +
-      # Threshold lines
-      geom_hline(yintercept = 0.5, linetype = "dashed", color = "orange", alpha = 0.5) +
-      geom_hline(yintercept = 1.0, linetype = "dashed", color = "red", alpha = 0.5) +
-      annotate("text", x = max(summary_data$TIME_PLOT) - 5, y = 0.55,
-               label = "0.5 mg/L", color = "orange", size = 3) +
-      annotate("text", x = max(summary_data$TIME_PLOT) - 5, y = 1.1,
-               label = "1.0 mg/L", color = "red", size = 3) +
+      geom_vline(xintercept = 3, linetype = "dotted", color = "orange", linewidth = 0.8) +
+      geom_vline(xintercept = 5, linetype = "dotted", color = "red", linewidth = 0.8) +
+      annotate("text", x = 3.2, y = 0.002, label = "72hr", color = "orange", hjust = 0, size = 3) +
+      annotate("text", x = 5.2, y = 0.002, label = "120hr", color = "red", hjust = 0, size = 3) +
+      # Threshold lines for Cavg reference
+      geom_hline(yintercept = 0.18, linetype = "dashed", color = "orange", alpha = 0.7) +
+      geom_hline(yintercept = 0.32, linetype = "dashed", color = "blue", alpha = 0.5) +
+      geom_hline(yintercept = 0.45, linetype = "dashed", color = "red", alpha = 0.7) +
+      annotate("text", x = max(summary_data$TIME_PLOT) - 5, y = 0.20,
+               label = "0.18 (Day3 Cavg)", color = "orange", size = 3) +
+      annotate("text", x = max(summary_data$TIME_PLOT) - 5, y = 0.35,
+               label = "0.32", color = "blue", size = 3) +
+      annotate("text", x = max(summary_data$TIME_PLOT) - 5, y = 0.50,
+               label = "0.45 (Day5 Cavg)", color = "red", size = 3) +
       scale_color_manual(values = c("Step-up 1" = "#e74c3c",
                                     "Step-up 2" = "#f39c12",
                                     "Treatment" = "#27ae60"),
                          name = "Dose Type") +
       scale_y_log10(
-        breaks = c(0.001, 0.01, 0.1, 0.5, 1, 10, 100),
-        labels = c("0.001", "0.01", "0.1", "0.5", "1", "10", "100")
+        breaks = c(0.001, 0.01, 0.1, 0.18, 0.32, 0.45, 1, 10, 100),
+        labels = c("0.001", "0.01", "0.1", "0.18", "0.32", "0.45", "1", "10", "100")
       ) +
       annotation_logticks(sides = "l") +
       labs(
         x = "Time (days)",
-        y = "Concentration (mg/L)",
+        y = "Concentration (µg/mL)",
         title = paste0("Teclistamab PK Profile (n=", input$n_subjects, " subjects)"),
         subtitle = paste0("BW: ", input$bw, " kg | ISS: ", input$iss,
-                          " | ", input$igg_type,
+                          " | ", input$igg_type, " | ECOG: ", input$ecog,
                           "\nShaded: 90% PI (light) and 50% PI (dark), Line: Median")
       ) +
       theme_bw(base_size = 14) +
