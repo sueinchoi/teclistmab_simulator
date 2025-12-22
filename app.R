@@ -414,8 +414,7 @@ ui <- fluidPage(
                hr(),
                numericInput("bw", "Body Weight (kg):", value = 70, min = 30, max = 150, step = 0.1),
                selectInput("iss", "ISS Stage:", choices = c("I", "II", "III"), selected = "II"),
-               selectInput("igg_type", "Immunoglobulin Type:", choices = c("IgG", "Non-IgG"), selected = "IgG"),
-               selectInput("ecog", "ECOG Performance Status:", choices = c("0", "1", "2", "3", "4"), selected = "1")
+               selectInput("igg_type", "Immunoglobulin Type:", choices = c("IgG", "Non-IgG"), selected = "IgG")
            ),
 
            div(class = "param-box",
@@ -649,8 +648,7 @@ server <- function(input, output, session) {
         typical_params = params_typical,
         cavg_day3 = cavg_day3,
         cavg_day5 = cavg_day5,
-        bw = bw,
-        ecog = input$ecog
+        bw = bw
       )
     })
   })
@@ -663,7 +661,6 @@ server <- function(input, output, session) {
 
     cavg_day3 <- result$cavg_day3$median
     cavg_day5 <- result$cavg_day5$median
-    ecog <- result$ecog
 
     warnings <- list()
     infos <- list()
@@ -716,16 +713,6 @@ server <- function(input, output, session) {
           )
         ))
       }
-    }
-
-    # ECOG status info
-    if (ecog %in% c("2", "3", "4")) {
-      warnings <- c(warnings, list(
-        div(class = "crs-metric crs-warning",
-            icon("user-injured"),
-            sprintf(" ECOG %s: 환자 상태 고려 필요", ecog)
-        )
-      ))
     }
 
     if (length(warnings) == 0) {
@@ -850,7 +837,7 @@ server <- function(input, output, session) {
         y = "Concentration (µg/mL)",
         title = paste0("Teclistamab PK Profile (n=", input$n_subjects, " subjects)"),
         subtitle = paste0("BW: ", input$bw, " kg | ISS: ", input$iss,
-                          " | ", input$igg_type, " | ECOG: ", input$ecog,
+                          " | ", input$igg_type,
                           "\nShaded: 90% PI (light) and 50% PI (dark), Line: Median")
       ) +
       theme_bw(base_size = 14) +
