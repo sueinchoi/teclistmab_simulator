@@ -159,13 +159,14 @@ generate_individual_params <- function(typical_params, n_subjects, seed = NULL) 
 }
 
 #-------------------------------------------------------------------------------
-# NCA Calculation Function (First Dose Only: Day 0 to Day 3)
+# NCA Calculation Function (First Dose Only: Day 1 to Day 4)
 #-------------------------------------------------------------------------------
 
 calculate_nca_first_dose <- function(sim_data) {
-  # Filter data for first dose interval (Day 0 to Day 3)
+  # Filter data for first dose interval (Day 1 to Day 4)
+  # TIME_DAY starts from 1 (Day 1 = time 0)
   conc_data <- sim_data %>%
-    filter(TIME_DAY >= 0 & TIME_DAY <= 3) %>%
+    filter(TIME_DAY >= 1 & TIME_DAY <= 4) %>%
     filter(DV > 0) %>%
     select(TIME_DAY, DV)
 
@@ -214,7 +215,7 @@ calculate_nca_first_dose <- function(sim_data) {
   }
 
   tibble(
-    Parameter = c("Cmax", "Tmax", "AUC(0-3d)", "AUC(0-inf)", "t1/2", "Lambda_z"),
+    Parameter = c("Cmax", "Tmax", "AUC(Day1-4)", "AUC(0-inf)", "t1/2", "Lambda_z"),
     Value = c(Cmax, Tmax, AUC_total, AUC_inf, t_half, lambda_z),
     Unit = c("mg/L", "day", "mg·day/L", "mg·day/L", "day", "1/day")
   )
@@ -335,8 +336,8 @@ ui <- fluidPage(
                             tags$tr(tags$th("Day"), tags$th("Dose"), tags$th("Description"))
                           ),
                           tags$tbody(
-                            tags$tr(tags$td("0"), tags$td("0.06 mg/kg"), tags$td("Step-up 1")),
-                            tags$tr(tags$td("3"), tags$td("0.3 mg/kg"), tags$td("Step-up 2")),
+                            tags$tr(tags$td("1"), tags$td("0.06 mg/kg"), tags$td("Step-up 1")),
+                            tags$tr(tags$td("4"), tags$td("0.3 mg/kg"), tags$td("Step-up 2")),
                             tags$tr(tags$td("7+"), tags$td("1.5 mg/kg"), tags$td("Treatment (QW)"))
                           )
                ),
@@ -381,7 +382,7 @@ ui <- fluidPage(
 
            # NCA Parameters (First Dose)
            div(class = "result-box",
-               h4(icon("table"), " NCA Parameters (First Dose: Day 0-3)"),
+               h4(icon("table"), " NCA Parameters (First Dose: Day 1-4)"),
                hr(),
                DTOutput("nca_table")
            )
@@ -446,18 +447,18 @@ server <- function(input, output, session) {
       )
 
       # Create dosing schedule (Teclistamab step-up regimen)
-      # Day 0: Step-up 1 (0.06 mg/kg)
-      # Day 3: Step-up 2 (0.3 mg/kg)
-      # Day 7+: Treatment doses weekly (1.5 mg/kg)
+      # Day 1: Step-up 1 (0.06 mg/kg) - time 0
+      # Day 4: Step-up 2 (0.3 mg/kg) - time 3*24 = 72 hours
+      # Day 7+: Treatment doses weekly (1.5 mg/kg) - time 6*24 = 144 hours
 
       dose1_mg <- input$dose1 * bw
       dose2_mg <- input$dose2 * bw
       dose_treat_mg <- input$dose_treat * bw
 
-      # Treatment dose times (Day 7, 14, 21, ...)
-      treatment_times <- 7 * 24 + seq(0, (input$n_treatment_doses - 1) * 7 * 24, by = 7 * 24)
+      # Treatment dose times (Day 7, 14, 21, ... = 6, 13, 20, ... days from start)
+      treatment_times <- 6 * 24 + seq(0, (input$n_treatment_doses - 1) * 7 * 24, by = 7 * 24)
 
-      # All dose times and amounts
+      # All dose times and amounts (internal time starts at 0)
       dose_times <- c(0, 3 * 24, treatment_times)  # in hours
       dose_amounts <- c(dose1_mg, dose2_mg, rep(dose_treat_mg, input$n_treatment_doses))
 
@@ -522,7 +523,7 @@ server <- function(input, output, session) {
           filter(evid == 0) %>%
           mutate(
             TIME_HOUR = time,
-            TIME_DAY = time / 24
+            TIME_DAY = time / 24 + 1  # Day 1 starts at time 0
           )
 
         out
@@ -530,9 +531,9 @@ server <- function(input, output, session) {
 
       incProgress(0.2, detail = "Complete!")
 
-      # Dosing info for plot
+      # Dosing info for plot (Day 1 = time 0)
       dosing_info <- tibble(
-        time_day = dose_times / 24,
+        time_day = dose_times / 24 + 1,  # Convert to Day (starting from 1)
         dose_mg = dose_amounts,
         dose_type = c("Step-up 1", "Step-up 2", rep("Treatment", input$n_treatment_doses))
       )
@@ -641,7 +642,7 @@ server <- function(input, output, session) {
         class = 'cell-border stripe',
         caption = htmltools::tags$caption(
           style = 'caption-side: top; text-align: left; color: gray;',
-          paste0('NCA calculated for first dose interval (Day 0-3) across ',
+          paste0('NCA calculated for first dose interval (Day 1-4) across ',
                  input$n_subjects, ' virtual subjects')
         )
       )
