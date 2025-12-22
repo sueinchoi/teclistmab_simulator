@@ -431,7 +431,7 @@ server <- function(input, output, session) {
 
   # Plot PK curve
   output$pk_plot <- renderPlot({
-    req(input$simulate)
+    if (is.null(input$simulate) || input$simulate == 0) return(NULL)
     result <- sim_result()
     if (is.null(result)) return(NULL)
     sim_data <- result$simulation
@@ -468,7 +468,7 @@ server <- function(input, output, session) {
 
   # Calculate and display NCA parameters
   output$nca_table <- renderDT({
-    req(input$simulate)
+    if (is.null(input$simulate) || input$simulate == 0) return(NULL)
     result <- sim_result()
     if (is.null(result)) return(NULL)
     nca_params <- calculate_nca(result$simulation)
