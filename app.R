@@ -4,6 +4,7 @@
 # Individual PK parameter calculation based on patient characteristics
 # 2-Compartment model with time-dependent clearance
 # Monte Carlo simulation with inter-individual variability (IIV)
+# CRS Risk Assessment
 #
 # Reference: Miao et al. (2023) - Teclistamab Population PK Model
 #===============================================================================
@@ -159,14 +160,14 @@ generate_individual_params <- function(typical_params, n_subjects, seed = NULL) 
 }
 
 #-------------------------------------------------------------------------------
-# NCA Calculation Function (First Dose Only: Day 1 to Day 4)
+# NCA Calculation Function (First Dose Only)
 #-------------------------------------------------------------------------------
 
-calculate_nca_first_dose <- function(sim_data) {
-  # Filter data for first dose interval (Day 1 to Day 4)
+calculate_nca_first_dose <- function(sim_data, day_stepup2) {
+  # Filter data for first dose interval (Day 1 to step-up 2 day)
   # TIME_DAY starts from 1 (Day 1 = time 0)
   conc_data <- sim_data %>%
-    filter(TIME_DAY >= 1 & TIME_DAY <= 4) %>%
+    filter(TIME_DAY >= 1 & TIME_DAY <= day_stepup2) %>%
     filter(DV > 0) %>%
     select(TIME_DAY, DV)
 
@@ -215,7 +216,7 @@ calculate_nca_first_dose <- function(sim_data) {
   }
 
   tibble(
-    Parameter = c("Cmax", "Tmax", "AUC(Day1-4)", "AUC(0-inf)", "t1/2", "Lambda_z"),
+    Parameter = c("Cmax", "Tmax", "AUC(first dose)", "AUC(0-inf)", "t1/2", "Lambda_z"),
     Value = c(Cmax, Tmax, AUC_total, AUC_inf, t_half, lambda_z),
     Unit = c("mg/L", "day", "mg·day/L", "mg·day/L", "day", "1/day")
   )
@@ -225,12 +226,12 @@ calculate_nca_first_dose <- function(sim_data) {
 # Calculate NCA Summary Statistics for Monte Carlo
 #-------------------------------------------------------------------------------
 
-calculate_nca_summary <- function(all_sim_data) {
+calculate_nca_summary <- function(all_sim_data, day_stepup2) {
   # Calculate NCA for each subject
   nca_results <- all_sim_data %>%
     group_by(ID) %>%
     group_modify(~ {
-      nca <- calculate_nca_first_dose(.x)
+      nca <- calculate_nca_first_dose(.x, day_stepup2)
       if (is.null(nca)) {
         tibble(Parameter = character(), Value = numeric(), Unit = character())
       } else {
@@ -259,6 +260,28 @@ calculate_nca_summary <- function(all_sim_data) {
     select(Parameter, Mean, SD, `CV%`, Median, `90% PI`, Unit)
 
   nca_summary
+}
+
+#-------------------------------------------------------------------------------
+# Calculate Cmax at specific time points
+#-------------------------------------------------------------------------------
+
+calculate_cmax_at_time <- function(sim_data, target_hour) {
+  # Find concentration closest to target hour
+  # TIME_HOUR is the internal simulation time (0-based)
+  target_data <- sim_data %>%
+    filter(abs(TIME_HOUR - target_hour) < 1) %>%  # within 1 hour tolerance
+    group_by(ID) %>%
+    summarise(Conc = max(DV), .groups = "drop")
+
+  if (nrow(target_data) == 0) return(list(mean = NA, median = NA, q5 = NA, q95 = NA))
+
+  list(
+    mean = mean(target_data$Conc, na.rm = TRUE),
+    median = median(target_data$Conc, na.rm = TRUE),
+    q5 = quantile(target_data$Conc, 0.05, na.rm = TRUE),
+    q95 = quantile(target_data$Conc, 0.95, na.rm = TRUE)
+  )
 }
 
 #-------------------------------------------------------------------------------
@@ -291,6 +314,27 @@ ui <- fluidPage(
         border: 1px solid #b8daff;
         margin-bottom: 20px;
       }
+      .warning-box {
+        background-color: #fff3cd;
+        border-radius: 10px;
+        padding: 15px;
+        border: 2px solid #ffc107;
+        margin-bottom: 20px;
+      }
+      .danger-box {
+        background-color: #f8d7da;
+        border-radius: 10px;
+        padding: 15px;
+        border: 2px solid #dc3545;
+        margin-bottom: 20px;
+      }
+      .success-box {
+        background-color: #d4edda;
+        border-radius: 10px;
+        padding: 15px;
+        border: 2px solid #28a745;
+        margin-bottom: 20px;
+      }
       .btn-simulate {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         border: none;
@@ -300,11 +344,23 @@ ui <- fluidPage(
       .btn-simulate:hover {
         background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
       }
-      .dose-table {
-        font-size: 12px;
+      .crs-metric {
+        font-size: 16px;
+        padding: 8px 12px;
+        margin: 5px 0;
+        border-radius: 5px;
       }
-      .dose-table th, .dose-table td {
-        padding: 5px 10px;
+      .crs-warning {
+        background-color: #fff3cd;
+        border-left: 4px solid #ffc107;
+      }
+      .crs-danger {
+        background-color: #f8d7da;
+        border-left: 4px solid #dc3545;
+      }
+      .crs-safe {
+        background-color: #d4edda;
+        border-left: 4px solid #28a745;
       }
     "))
   ),
@@ -312,7 +368,7 @@ ui <- fluidPage(
   # Header
   div(class = "main-header",
       h1("Teclistamab PK Simulator", style = "margin: 0;"),
-      p("Monte Carlo Simulation with Inter-Individual Variability", style = "margin: 5px 0 0 0; opacity: 0.9;")
+      p("Monte Carlo Simulation with CRS Risk Assessment", style = "margin: 5px 0 0 0; opacity: 0.9;")
   ),
 
   # Main Layout
@@ -330,18 +386,14 @@ ui <- fluidPage(
            div(class = "param-box",
                h4(icon("syringe"), " Dosing Schedule"),
                hr(),
-               p(strong("Teclistamab Step-up Regimen:"), style = "margin-bottom: 10px;"),
-               tags$table(class = "dose-table table table-bordered",
-                          tags$thead(
-                            tags$tr(tags$th("Day"), tags$th("Dose"), tags$th("Description"))
-                          ),
-                          tags$tbody(
-                            tags$tr(tags$td("1"), tags$td("0.06 mg/kg"), tags$td("Step-up 1")),
-                            tags$tr(tags$td("4"), tags$td("0.3 mg/kg"), tags$td("Step-up 2")),
-                            tags$tr(tags$td("7+"), tags$td("1.5 mg/kg"), tags$td("Treatment (QW)"))
-                          )
+               p(strong("Step-up Dosing Days:"), style = "margin-bottom: 10px;"),
+               fluidRow(
+                 column(4, numericInput("day_stepup1", "Step-up 1 (Day):", value = 1, min = 1, max = 10, step = 1)),
+                 column(4, numericInput("day_stepup2", "Step-up 2 (Day):", value = 4, min = 2, max = 14, step = 1)),
+                 column(4, numericInput("day_treatment", "Treatment (Day):", value = 7, min = 3, max = 21, step = 1))
                ),
                hr(),
+               p(strong("Dose Amounts:"), style = "margin-bottom: 10px;"),
                numericInput("dose1", "Step-up 1st Dose (mg/kg):", value = 0.06, min = 0.01, max = 1, step = 0.01),
                numericInput("dose2", "Step-up 2nd Dose (mg/kg):", value = 0.3, min = 0.01, max = 1, step = 0.01),
                numericInput("dose_treat", "Treatment Dose (mg/kg):", value = 1.5, min = 0.1, max = 10, step = 0.1),
@@ -366,6 +418,9 @@ ui <- fluidPage(
 
     # Output Panel
     column(8,
+           # CRS Risk Assessment
+           uiOutput("crs_warning_ui"),
+
            # Calculated PK Parameters (Typical)
            div(class = "result-box",
                h4(icon("calculator"), " Typical PK Parameters"),
@@ -380,9 +435,16 @@ ui <- fluidPage(
                plotOutput("pk_plot", height = "450px")
            ),
 
+           # Cmax at specific timepoints
+           div(class = "result-box",
+               h4(icon("crosshairs"), " Concentration at Key Timepoints"),
+               hr(),
+               tableOutput("cmax_table")
+           ),
+
            # NCA Parameters (First Dose)
            div(class = "result-box",
-               h4(icon("table"), " NCA Parameters (First Dose: Day 1-4)"),
+               h4(icon("table"), " NCA Parameters (First Dose)"),
                hr(),
                DTOutput("nca_table")
            )
@@ -446,20 +508,21 @@ server <- function(input, output, session) {
         seed = input$seed
       )
 
-      # Create dosing schedule (Teclistamab step-up regimen)
-      # Day 1: Step-up 1 (0.06 mg/kg) - time 0
-      # Day 4: Step-up 2 (0.3 mg/kg) - time 3*24 = 72 hours
-      # Day 7+: Treatment doses weekly (1.5 mg/kg) - time 6*24 = 144 hours
+      # Create dosing schedule based on user input
+      # Convert Day to hours (Day 1 = time 0)
+      time_stepup1 <- (input$day_stepup1 - 1) * 24  # Day 1 = 0 hours
+      time_stepup2 <- (input$day_stepup2 - 1) * 24
+      time_treatment_start <- (input$day_treatment - 1) * 24
 
       dose1_mg <- input$dose1 * bw
       dose2_mg <- input$dose2 * bw
       dose_treat_mg <- input$dose_treat * bw
 
-      # Treatment dose times (Day 7, 14, 21, ... = 6, 13, 20, ... days from start)
-      treatment_times <- 6 * 24 + seq(0, (input$n_treatment_doses - 1) * 7 * 24, by = 7 * 24)
+      # Treatment dose times
+      treatment_times <- time_treatment_start + seq(0, (input$n_treatment_doses - 1) * 7 * 24, by = 7 * 24)
 
-      # All dose times and amounts (internal time starts at 0)
-      dose_times <- c(0, 3 * 24, treatment_times)  # in hours
+      # All dose times and amounts
+      dose_times <- c(time_stepup1, time_stepup2, treatment_times)
       dose_amounts <- c(dose1_mg, dose2_mg, rep(dose_treat_mg, input$n_treatment_doses))
 
       incProgress(0.1, detail = "Creating dosing schedule...")
@@ -531,21 +594,118 @@ server <- function(input, output, session) {
 
       incProgress(0.2, detail = "Complete!")
 
-      # Dosing info for plot (Day 1 = time 0)
+      # Dosing info for plot
       dosing_info <- tibble(
-        time_day = dose_times / 24 + 1,  # Convert to Day (starting from 1)
+        time_day = dose_times / 24 + 1,
         dose_mg = dose_amounts,
         dose_type = c("Step-up 1", "Step-up 2", rep("Treatment", input$n_treatment_doses))
       )
+
+      # Calculate Cmax at Day 3 (72hr) and Day 5 (120hr)
+      # Day 3 = 48 hours from Day 1 (time 0), Day 5 = 96 hours
+      cmax_day3 <- calculate_cmax_at_time(all_results, 48)  # 72hr from start but we use 48hr since Day3 = hour 48
+      cmax_day5 <- calculate_cmax_at_time(all_results, 96)  # 120hr from start but we use 96hr since Day5 = hour 96
 
       list(
         simulation = all_results,
         dosing_info = dosing_info,
         ind_params = ind_params,
-        typical_params = params_typical
+        typical_params = params_typical,
+        cmax_day3 = cmax_day3,
+        cmax_day5 = cmax_day5,
+        bw = bw
       )
     })
   })
+
+  # CRS Warning UI
+  output$crs_warning_ui <- renderUI({
+    if (is.null(input$simulate) || input$simulate == 0) return(NULL)
+    result <- sim_result()
+    if (is.null(result)) return(NULL)
+
+    bw <- result$bw
+    cmax_day3 <- result$cmax_day3$median
+    cmax_day5 <- result$cmax_day5$median
+
+    warnings <- list()
+
+    # Check Day 5 Cmax > 1.0
+    if (!is.na(cmax_day5) && cmax_day5 > 1.0) {
+      warnings <- c(warnings, list(
+        div(class = "crs-metric crs-danger",
+            icon("exclamation-triangle"),
+            strong(" CRS 위험 주의! "),
+            sprintf("Day 5 Cmax (%.3f mg/L) > 1.0 mg/L", cmax_day5)
+        )
+      ))
+    }
+
+    # Check BW >= 65 and Day 3 Cmax > 0.5
+    if (bw >= 65 && !is.na(cmax_day3) && cmax_day3 > 0.5) {
+      warnings <- c(warnings, list(
+        div(class = "crs-metric crs-danger",
+            icon("exclamation-circle"),
+            strong(" CRS Grade 2 매우 주의! "),
+            sprintf("BW (%.1f kg) ≥ 65 AND Day 3 Cmax (%.3f mg/L) > 0.5 mg/L", bw, cmax_day3)
+        )
+      ))
+    } else if (bw >= 65) {
+      # Check BW >= 65 only
+      warnings <- c(warnings, list(
+        div(class = "crs-metric crs-warning",
+            icon("exclamation-triangle"),
+            strong(" CRS Grade 2 위험 주의 "),
+            sprintf("BW (%.1f kg) ≥ 65 kg", bw)
+        )
+      ))
+    }
+
+    if (length(warnings) == 0) {
+      div(class = "success-box",
+          h4(icon("check-circle"), " CRS Risk Assessment"),
+          hr(),
+          div(class = "crs-metric crs-safe",
+              icon("check"),
+              " 주요 CRS 위험 지표 정상 범위"
+          )
+      )
+    } else {
+      div(class = "danger-box",
+          h4(icon("exclamation-triangle"), " CRS Risk Assessment"),
+          hr(),
+          warnings
+      )
+    }
+  })
+
+  # Cmax at specific timepoints table
+  output$cmax_table <- renderTable({
+    if (is.null(input$simulate) || input$simulate == 0) return(NULL)
+    result <- sim_result()
+    if (is.null(result)) return(NULL)
+
+    cmax_day3 <- result$cmax_day3
+    cmax_day5 <- result$cmax_day5
+
+    data.frame(
+      Timepoint = c("Day 3 (72 hr)", "Day 5 (120 hr)"),
+      `Median (mg/L)` = c(
+        sprintf("%.4f", cmax_day3$median),
+        sprintf("%.4f", cmax_day5$median)
+      ),
+      `Mean (mg/L)` = c(
+        sprintf("%.4f", cmax_day3$mean),
+        sprintf("%.4f", cmax_day5$mean)
+      ),
+      `90% PI` = c(
+        sprintf("[%.4f - %.4f]", cmax_day3$q5, cmax_day3$q95),
+        sprintf("[%.4f - %.4f]", cmax_day5$q5, cmax_day5$q95)
+      ),
+      `Threshold` = c("0.5 mg/L (with BW≥65)", "1.0 mg/L"),
+      check.names = FALSE
+    )
+  }, striped = TRUE, hover = TRUE, bordered = TRUE, width = "100%")
 
   # Plot PK curves
   output$pk_plot <- renderPlot({
@@ -558,7 +718,7 @@ server <- function(input, output, session) {
 
     # Calculate summary statistics (convert TIME_DAY back to 0-based for plotting)
     summary_data <- sim_data %>%
-      mutate(TIME_PLOT = TIME_DAY - 1) %>%  # Convert back to 0-based time
+      mutate(TIME_PLOT = TIME_DAY - 1) %>%
       group_by(TIME_PLOT) %>%
       summarise(
         median = median(DV),
@@ -591,13 +751,25 @@ server <- function(input, output, session) {
       geom_vline(data = dosing_plot,
                  aes(xintercept = time_plot, color = dose_type),
                  linetype = "dashed", alpha = 0.7) +
+      # Day 3 and Day 5 markers
+      geom_vline(xintercept = 2, linetype = "dotted", color = "orange", linewidth = 0.8) +
+      geom_vline(xintercept = 4, linetype = "dotted", color = "red", linewidth = 0.8) +
+      annotate("text", x = 2.2, y = 0.002, label = "Day 3", color = "orange", hjust = 0, size = 3) +
+      annotate("text", x = 4.2, y = 0.002, label = "Day 5", color = "red", hjust = 0, size = 3) +
+      # Threshold lines
+      geom_hline(yintercept = 0.5, linetype = "dashed", color = "orange", alpha = 0.5) +
+      geom_hline(yintercept = 1.0, linetype = "dashed", color = "red", alpha = 0.5) +
+      annotate("text", x = max(summary_data$TIME_PLOT) - 5, y = 0.55,
+               label = "0.5 mg/L", color = "orange", size = 3) +
+      annotate("text", x = max(summary_data$TIME_PLOT) - 5, y = 1.1,
+               label = "1.0 mg/L", color = "red", size = 3) +
       scale_color_manual(values = c("Step-up 1" = "#e74c3c",
                                     "Step-up 2" = "#f39c12",
                                     "Treatment" = "#27ae60"),
                          name = "Dose Type") +
       scale_y_log10(
-        breaks = c(0.001, 0.01, 0.1, 1, 10, 100),
-        labels = c("0.001", "0.01", "0.1", "1", "10", "100")
+        breaks = c(0.001, 0.01, 0.1, 0.5, 1, 10, 100),
+        labels = c("0.001", "0.01", "0.1", "0.5", "1", "10", "100")
       ) +
       annotation_logticks(sides = "l") +
       labs(
@@ -615,7 +787,7 @@ server <- function(input, output, session) {
         panel.grid.minor = element_line(color = "gray90"),
         legend.position = "bottom"
       ) +
-      coord_cartesian(ylim = c(0.001, NA))
+      coord_cartesian(ylim = c(0.001, NA), xlim = c(0, NA))
   })
 
   # NCA table (First Dose)
@@ -624,7 +796,7 @@ server <- function(input, output, session) {
     result <- sim_result()
     if (is.null(result)) return(NULL)
 
-    nca_summary <- calculate_nca_summary(result$simulation)
+    nca_summary <- calculate_nca_summary(result$simulation, input$day_stepup2)
 
     if (is.null(nca_summary)) {
       return(NULL)
@@ -647,7 +819,7 @@ server <- function(input, output, session) {
         class = 'cell-border stripe',
         caption = htmltools::tags$caption(
           style = 'caption-side: top; text-align: left; color: gray;',
-          paste0('NCA calculated for first dose interval (Day 1-4) across ',
+          paste0('NCA calculated for first dose interval (Day 1 to Day ', input$day_stepup2, ') across ',
                  input$n_subjects, ' virtual subjects')
         )
       )
