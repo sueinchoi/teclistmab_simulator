@@ -263,24 +263,24 @@ calculate_nca_summary <- function(all_sim_data, day_stepup2) {
 }
 
 #-------------------------------------------------------------------------------
-# Calculate Cmax at specific time points
+# Calculate Cmax up to specific time point
 #-------------------------------------------------------------------------------
 
-calculate_cmax_at_time <- function(sim_data, target_hour) {
-  # Find concentration closest to target hour
+calculate_cmax_up_to_time <- function(sim_data, end_hour) {
+  # Calculate Cmax from time 0 up to end_hour for each subject
   # TIME_HOUR is the internal simulation time (0-based)
-  target_data <- sim_data %>%
-    filter(abs(TIME_HOUR - target_hour) < 1) %>%  # within 1 hour tolerance
+  cmax_data <- sim_data %>%
+    filter(TIME_HOUR >= 0 & TIME_HOUR <= end_hour) %>%
     group_by(ID) %>%
-    summarise(Conc = max(DV), .groups = "drop")
+    summarise(Cmax = max(DV), .groups = "drop")
 
-  if (nrow(target_data) == 0) return(list(mean = NA, median = NA, q5 = NA, q95 = NA))
+  if (nrow(cmax_data) == 0) return(list(mean = NA, median = NA, q5 = NA, q95 = NA))
 
   list(
-    mean = mean(target_data$Conc, na.rm = TRUE),
-    median = median(target_data$Conc, na.rm = TRUE),
-    q5 = quantile(target_data$Conc, 0.05, na.rm = TRUE),
-    q95 = quantile(target_data$Conc, 0.95, na.rm = TRUE)
+    mean = mean(cmax_data$Cmax, na.rm = TRUE),
+    median = median(cmax_data$Cmax, na.rm = TRUE),
+    q5 = quantile(cmax_data$Cmax, 0.05, na.rm = TRUE),
+    q95 = quantile(cmax_data$Cmax, 0.95, na.rm = TRUE)
   )
 }
 
@@ -601,10 +601,11 @@ server <- function(input, output, session) {
         dose_type = c("Step-up 1", "Step-up 2", rep("Treatment", input$n_treatment_doses))
       )
 
-      # Calculate Cmax at Day 3 (72hr) and Day 5 (120hr)
-      # Day 3 = 48 hours from Day 1 (time 0), Day 5 = 96 hours
-      cmax_day3 <- calculate_cmax_at_time(all_results, 48)  # 72hr from start but we use 48hr since Day3 = hour 48
-      cmax_day5 <- calculate_cmax_at_time(all_results, 96)  # 120hr from start but we use 96hr since Day5 = hour 96
+      # Calculate Cmax up to Day 3 (72hr) and Day 5 (120hr)
+      # Day 3 Cmax = maximum concentration from 0 to 72 hours
+      # Day 5 Cmax = maximum concentration from 0 to 120 hours
+      cmax_day3 <- calculate_cmax_up_to_time(all_results, 72)   # Cmax from 0 to 72hr
+      cmax_day5 <- calculate_cmax_up_to_time(all_results, 120)  # Cmax from 0 to 120hr
 
       list(
         simulation = all_results,
@@ -689,7 +690,7 @@ server <- function(input, output, session) {
     cmax_day5 <- result$cmax_day5
 
     data.frame(
-      Timepoint = c("Day 3 (72 hr)", "Day 5 (120 hr)"),
+      Parameter = c("Day 3 Cmax (0-72 hr)", "Day 5 Cmax (0-120 hr)"),
       `Median (mg/L)` = c(
         sprintf("%.4f", cmax_day3$median),
         sprintf("%.4f", cmax_day5$median)
@@ -702,7 +703,7 @@ server <- function(input, output, session) {
         sprintf("[%.4f - %.4f]", cmax_day3$q5, cmax_day3$q95),
         sprintf("[%.4f - %.4f]", cmax_day5$q5, cmax_day5$q95)
       ),
-      `Threshold` = c("0.5 mg/L (with BW≥65)", "1.0 mg/L"),
+      `CRS Threshold` = c("0.5 mg/L (with BW≥65)", "1.0 mg/L"),
       check.names = FALSE
     )
   }, striped = TRUE, hover = TRUE, bordered = TRUE, width = "100%")
