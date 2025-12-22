@@ -708,7 +708,7 @@ server <- function(input, output, session) {
         infos <- c(infos, list(
           div(class = "crs-metric crs-safe",
               icon("check-circle"),
-              strong(" Optimal 범위! "),
+              strong(" Optimal (Efficacy good, CRS risk low) "),
               sprintf("Day 5 Cavg (%.4f µg/mL) ∈ [0.32 - 0.45] µg/mL", cavg_day5)
           )
         ))
