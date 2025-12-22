@@ -3,6 +3,7 @@
 #
 # Individual PK parameter calculation based on patient characteristics
 # 2-Compartment model with time-dependent clearance
+# Monte Carlo simulation with inter-individual variability (IIV)
 #
 # Reference: Miao et al. (2023) - Teclistamab Population PK Model
 #===============================================================================
@@ -10,7 +11,6 @@
 library(shiny)
 library(mrgsolve)
 library(tidyverse)
-library(PKNCA)
 library(DT)
 
 #-------------------------------------------------------------------------------
@@ -71,10 +71,35 @@ CL_T    : Time-dependent clearance at this time (L/day)
 mod <- mcode("teclistamab_app", model_code, compile = TRUE)
 
 #-------------------------------------------------------------------------------
-# PK Parameter Calculation Functions
+# IIV Parameters (CV to omega conversion)
+# omega = sqrt(log(1 + CV^2))
 #-------------------------------------------------------------------------------
 
-calculate_pk_params <- function(bw, iss, igg_type) {
+cv_to_omega <- function(cv) {
+  sqrt(log(1 + cv^2))
+}
+
+# Inter-individual variability (CV)
+IIV_CV <- list(
+  CL1 = 0.536,   # 53.6%
+  CL2 = 1.07,    # 107%
+  V1  = 0.488,   # 48.8%
+  KA  = 0.452    # 45.2%
+)
+
+# Convert to omega
+IIV_OMEGA <- list(
+  CL1 = cv_to_omega(IIV_CV$CL1),
+  CL2 = cv_to_omega(IIV_CV$CL2),
+  V1  = cv_to_omega(IIV_CV$V1),
+  KA  = cv_to_omega(IIV_CV$KA)
+)
+
+#-------------------------------------------------------------------------------
+# PK Parameter Calculation Functions (Typical Values)
+#-------------------------------------------------------------------------------
+
+calculate_pk_params_typical <- function(bw, iss, igg_type) {
   # ISS indicator variables
   iss_2 <- ifelse(iss == "II", 1, 0)
   iss_3 <- ifelse(iss == "III", 1, 0)
@@ -83,46 +108,64 @@ calculate_pk_params <- function(bw, iss, igg_type) {
   non_igg <- ifelse(igg_type == "Non-IgG", 1, 0)
 
   # Calculate CL1 (L/day)
-  # CL1 = 0.449 × (BWT/74)^0.704 × 1.31^(ISS=II) × 1.67^(ISS=III) × 0.689^(Non-IgG)
   CL1 <- 0.449 * (bw / 74)^0.704 * (1.31^iss_2) * (1.67^iss_3) * (0.689^non_igg)
 
   # Calculate CL2 (L/day)
-  # CL2 = 0.547 × 0.295^(Non-IgG)
   CL2 <- 0.547 * (0.295^non_igg)
 
   # Calculate V1 (L)
-  # V1 = 4.13 × (BWT/74)^0.358
   V1 <- 4.13 * (bw / 74)^0.358
 
   # Calculate V2 (L)
-  # V2 = 1.34 × (BWT/74)^1.40
   V2 <- 1.34 * (bw / 74)^1.40
 
   # Fixed parameters
-  Q <- 0.039      # Intercompartmental clearance (L/day)
-  KA <- 0.133     # Absorption rate constant (1/day)
-  F1 <- 0.718     # Bioavailability
-  KDES <- 0.0292  # Clearance decay rate (1/day)
+  Q <- 0.039
+  KA <- 0.133
+  F1 <- 0.718
+  KDES <- 0.0292
 
   list(
-    CL1 = CL1,
-    CL2 = CL2,
-    V1 = V1,
-    V2 = V2,
-    Q = Q,
-    KA = KA,
-    F1 = F1,
-    KDES = KDES
+    CL1 = CL1, CL2 = CL2, V1 = V1, V2 = V2,
+    Q = Q, KA = KA, F1 = F1, KDES = KDES
   )
 }
 
 #-------------------------------------------------------------------------------
-# NCA Calculation Function
+# Generate Individual Parameters with IIV (Monte Carlo)
 #-------------------------------------------------------------------------------
 
-calculate_nca <- function(sim_data) {
-  # Use data after last dose for steady-state NCA
+generate_individual_params <- function(typical_params, n_subjects, seed = NULL) {
+  if (!is.null(seed)) set.seed(seed)
+
+  # Generate eta values (random effects)
+  eta_CL1 <- rnorm(n_subjects, 0, IIV_OMEGA$CL1)
+  eta_CL2 <- rnorm(n_subjects, 0, IIV_OMEGA$CL2)
+  eta_V1  <- rnorm(n_subjects, 0, IIV_OMEGA$V1)
+  eta_KA  <- rnorm(n_subjects, 0, IIV_OMEGA$KA)
+
+  # Individual parameters = typical * exp(eta)
+  tibble(
+    ID = 1:n_subjects,
+    CL1 = typical_params$CL1 * exp(eta_CL1),
+    CL2 = typical_params$CL2 * exp(eta_CL2),
+    V1  = typical_params$V1  * exp(eta_V1),
+    V2  = typical_params$V2,  # No IIV on V2
+    Q   = typical_params$Q,
+    KA  = typical_params$KA  * exp(eta_KA),
+    F1  = typical_params$F1,
+    KDES = typical_params$KDES
+  )
+}
+
+#-------------------------------------------------------------------------------
+# NCA Calculation Function (First Dose Only: Day 0 to Day 3)
+#-------------------------------------------------------------------------------
+
+calculate_nca_first_dose <- function(sim_data) {
+  # Filter data for first dose interval (Day 0 to Day 3)
   conc_data <- sim_data %>%
+    filter(TIME_DAY >= 0 & TIME_DAY <= 3) %>%
     filter(DV > 0) %>%
     select(TIME_DAY, DV)
 
@@ -144,9 +187,9 @@ calculate_nca <- function(sim_data) {
     AUC_total <- AUC_total + dt * avg_conc
   }
 
-  # Calculate terminal half-life (using last 20% of data points)
+  # Calculate terminal half-life (using last 50% of data for first dose)
   n_points <- nrow(conc_data)
-  terminal_start <- max(1, floor(n_points * 0.8))
+  terminal_start <- max(1, floor(n_points * 0.5))
   terminal_data <- conc_data[terminal_start:n_points, ]
 
   if (nrow(terminal_data) >= 3 && all(terminal_data$DV > 0)) {
@@ -158,7 +201,6 @@ calculate_nca <- function(sim_data) {
 
     if (lambda_z > 0) {
       t_half <- log(2) / lambda_z
-      # AUC extrapolated to infinity
       AUC_inf <- AUC_total + Clast / lambda_z
     } else {
       t_half <- NA
@@ -171,18 +213,51 @@ calculate_nca <- function(sim_data) {
     lambda_z <- NA
   }
 
-  # Cavg (average concentration)
-  Cavg <- AUC_total / (Tlast - conc_data$TIME_DAY[1])
-
-  # Cmin (trough concentration - minimum after Tmax)
-  post_tmax <- conc_data %>% filter(TIME_DAY > Tmax)
-  Cmin <- if(nrow(post_tmax) > 0) min(post_tmax$DV) else NA
-
   tibble(
-    Parameter = c("Cmax", "Tmax", "Cmin", "Cavg", "AUC(0-last)", "AUC(0-inf)", "t1/2", "Lambda_z"),
-    Value = c(Cmax, Tmax, Cmin, Cavg, AUC_total, AUC_inf, t_half, lambda_z),
-    Unit = c("mg/L", "day", "mg/L", "mg/L", "mg·day/L", "mg·day/L", "day", "1/day")
+    Parameter = c("Cmax", "Tmax", "AUC(0-3d)", "AUC(0-inf)", "t1/2", "Lambda_z"),
+    Value = c(Cmax, Tmax, AUC_total, AUC_inf, t_half, lambda_z),
+    Unit = c("mg/L", "day", "mg·day/L", "mg·day/L", "day", "1/day")
   )
+}
+
+#-------------------------------------------------------------------------------
+# Calculate NCA Summary Statistics for Monte Carlo
+#-------------------------------------------------------------------------------
+
+calculate_nca_summary <- function(all_sim_data) {
+  # Calculate NCA for each subject
+  nca_results <- all_sim_data %>%
+    group_by(ID) %>%
+    group_modify(~ {
+      nca <- calculate_nca_first_dose(.x)
+      if (is.null(nca)) {
+        tibble(Parameter = character(), Value = numeric(), Unit = character())
+      } else {
+        nca
+      }
+    }) %>%
+    ungroup()
+
+  if (nrow(nca_results) == 0) return(NULL)
+
+  # Calculate summary statistics
+  nca_summary <- nca_results %>%
+    group_by(Parameter, Unit) %>%
+    summarise(
+      Mean = mean(Value, na.rm = TRUE),
+      SD = sd(Value, na.rm = TRUE),
+      Median = median(Value, na.rm = TRUE),
+      Q5 = quantile(Value, 0.05, na.rm = TRUE),
+      Q95 = quantile(Value, 0.95, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      `CV%` = (SD / Mean) * 100,
+      `90% PI` = paste0("[", signif(Q5, 3), " - ", signif(Q95, 3), "]")
+    ) %>%
+    select(Parameter, Mean, SD, `CV%`, Median, `90% PI`, Unit)
+
+  nca_summary
 }
 
 #-------------------------------------------------------------------------------
@@ -213,6 +288,7 @@ ui <- fluidPage(
         border-radius: 10px;
         padding: 15px;
         border: 1px solid #b8daff;
+        margin-bottom: 20px;
       }
       .btn-simulate {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -223,13 +299,19 @@ ui <- fluidPage(
       .btn-simulate:hover {
         background: linear-gradient(135deg, #764ba2 0%, #667eea 100%);
       }
+      .dose-table {
+        font-size: 12px;
+      }
+      .dose-table th, .dose-table td {
+        padding: 5px 10px;
+      }
     "))
   ),
 
   # Header
   div(class = "main-header",
       h1("Teclistamab PK Simulator", style = "margin: 0;"),
-      p("Individual PK Simulation based on Patient Characteristics", style = "margin: 5px 0 0 0; opacity: 0.9;")
+      p("Monte Carlo Simulation with Inter-Individual Variability", style = "margin: 5px 0 0 0; opacity: 0.9;")
   ),
 
   # Main Layout
@@ -239,52 +321,43 @@ ui <- fluidPage(
            div(class = "param-box",
                h4(icon("user"), " Patient Characteristics"),
                hr(),
-               numericInput("bw",
-                            "Body Weight (kg):",
-                            value = 70,
-                            min = 30,
-                            max = 150,
-                            step = 0.1),
-               selectInput("iss",
-                           "ISS Stage:",
-                           choices = c("I", "II", "III"),
-                           selected = "II"),
-               selectInput("igg_type",
-                           "Immunoglobulin Type:",
-                           choices = c("IgG", "Non-IgG"),
-                           selected = "IgG")
+               numericInput("bw", "Body Weight (kg):", value = 70, min = 30, max = 150, step = 0.1),
+               selectInput("iss", "ISS Stage:", choices = c("I", "II", "III"), selected = "II"),
+               selectInput("igg_type", "Immunoglobulin Type:", choices = c("IgG", "Non-IgG"), selected = "IgG")
            ),
 
            div(class = "param-box",
-               h4(icon("syringe"), " Dosing Information"),
+               h4(icon("syringe"), " Dosing Schedule"),
                hr(),
-               numericInput("dose",
-                            "Dose (mg/kg):",
-                            value = 1.5,
-                            min = 0.1,
-                            max = 10,
-                            step = 0.1),
-               numericInput("n_doses",
-                            "Number of Doses:",
-                            value = 8,
-                            min = 1,
-                            max = 50,
-                            step = 1),
-               selectInput("dosing_interval",
-                           "Dosing Interval:",
-                           choices = c("Weekly (QW)" = 7,
-                                       "Every 2 Weeks (Q2W)" = 14),
-                           selected = 7),
-               numericInput("sim_duration",
-                            "Simulation Duration after Last Dose (days):",
-                            value = 21,
-                            min = 7,
-                            max = 90,
-                            step = 1)
+               p(strong("Teclistamab Step-up Regimen:"), style = "margin-bottom: 10px;"),
+               tags$table(class = "dose-table table table-bordered",
+                          tags$thead(
+                            tags$tr(tags$th("Day"), tags$th("Dose"), tags$th("Description"))
+                          ),
+                          tags$tbody(
+                            tags$tr(tags$td("0"), tags$td("0.06 mg/kg"), tags$td("Step-up 1")),
+                            tags$tr(tags$td("3"), tags$td("0.3 mg/kg"), tags$td("Step-up 2")),
+                            tags$tr(tags$td("7+"), tags$td("1.5 mg/kg"), tags$td("Treatment (QW)"))
+                          )
+               ),
+               hr(),
+               numericInput("dose1", "Step-up 1st Dose (mg/kg):", value = 0.06, min = 0.01, max = 1, step = 0.01),
+               numericInput("dose2", "Step-up 2nd Dose (mg/kg):", value = 0.3, min = 0.01, max = 1, step = 0.01),
+               numericInput("dose_treat", "Treatment Dose (mg/kg):", value = 1.5, min = 0.1, max = 10, step = 0.1),
+               numericInput("n_treatment_doses", "Number of Treatment Doses:", value = 6, min = 1, max = 50, step = 1),
+               numericInput("sim_duration", "Simulation Duration after Last Dose (days):", value = 21, min = 7, max = 90, step = 1)
+           ),
+
+           div(class = "param-box",
+               h4(icon("random"), " Monte Carlo Settings"),
+               hr(),
+               numericInput("n_subjects", "Number of Virtual Subjects:", value = 100, min = 10, max = 1000, step = 10),
+               numericInput("seed", "Random Seed (optional):", value = 12345, min = 1, step = 1),
+               p(tags$small("IIV: CL1=53.6%, CL2=107%, V1=48.8%, KA=45.2%"), style = "color: #6c757d;")
            ),
 
            div(style = "text-align: center; margin-top: 20px;",
-               actionButton("simulate", "Run Simulation",
+               actionButton("simulate", "Run Monte Carlo Simulation",
                             class = "btn btn-primary btn-simulate btn-lg",
                             icon = icon("play"))
            )
@@ -292,23 +365,23 @@ ui <- fluidPage(
 
     # Output Panel
     column(8,
-           # Calculated PK Parameters
-           div(class = "result-box", style = "margin-bottom: 20px;",
-               h4(icon("calculator"), " Calculated PK Parameters"),
+           # Calculated PK Parameters (Typical)
+           div(class = "result-box",
+               h4(icon("calculator"), " Typical PK Parameters"),
                hr(),
                tableOutput("pk_params_table")
            ),
 
            # PK Curve
-           div(class = "result-box", style = "margin-bottom: 20px;",
-               h4(icon("chart-line"), " Time-Concentration Profile"),
+           div(class = "result-box",
+               h4(icon("chart-line"), " Time-Concentration Profile (Monte Carlo)"),
                hr(),
-               plotOutput("pk_plot", height = "400px")
+               plotOutput("pk_plot", height = "450px")
            ),
 
-           # NCA Parameters
+           # NCA Parameters (First Dose)
            div(class = "result-box",
-               h4(icon("table"), " NCA Parameters"),
+               h4(icon("table"), " NCA Parameters (First Dose: Day 0-3)"),
                hr(),
                DTOutput("nca_table")
            )
@@ -328,19 +401,19 @@ ui <- fluidPage(
 
 server <- function(input, output, session) {
 
-  # Reactive: Calculate PK parameters
-  pk_params <- reactive({
-    calculate_pk_params(input$bw, input$iss, input$igg_type)
+  # Reactive: Calculate typical PK parameters
+  typical_params <- reactive({
+    calculate_pk_params_typical(input$bw, input$iss, input$igg_type)
   })
 
-  # Display calculated PK parameters
+  # Display typical PK parameters
   output$pk_params_table <- renderTable({
-    params <- pk_params()
+    params <- typical_params()
 
     data.frame(
       Parameter = c("CL1 (Linear CL)", "CL2 (Time-dep CL)", "V1 (Central)",
                     "V2 (Peripheral)", "Q", "KA", "F1", "KDES"),
-      Value = c(
+      `Typical Value` = c(
         sprintf("%.4f", params$CL1),
         sprintf("%.4f", params$CL2),
         sprintf("%.3f", params$V1),
@@ -350,100 +423,172 @@ server <- function(input, output, session) {
         sprintf("%.3f", params$F1),
         sprintf("%.4f", params$KDES)
       ),
-      Unit = c("L/day", "L/day", "L", "L", "L/day", "1/day", "-", "1/day")
+      Unit = c("L/day", "L/day", "L", "L", "L/day", "1/day", "-", "1/day"),
+      `IIV (CV%)` = c("53.6%", "107%", "48.8%", "-", "-", "45.2%", "-", "-"),
+      check.names = FALSE
     )
   }, striped = TRUE, hover = TRUE, bordered = TRUE, width = "100%")
 
-  # Reactive: Run simulation
+  # Reactive: Run Monte Carlo simulation
   sim_result <- eventReactive(input$simulate, {
 
-    withProgress(message = 'Running simulation...', value = 0, {
+    withProgress(message = 'Running Monte Carlo simulation...', value = 0, {
 
-      params <- pk_params()
+      params_typical <- typical_params()
+      bw <- input$bw
 
-      # Calculate actual dose in mg
-      dose_mg <- input$dose * input$bw
-
-      # Create dosing schedule (TIME in hours)
-      interval_hours <- as.numeric(input$dosing_interval) * 24
-      dose_times <- seq(0, (input$n_doses - 1) * interval_hours, by = interval_hours)
-
-      dosing_data <- tibble(
-        ID = 1,
-        time = dose_times,
-        amt = dose_mg,
-        cmt = 1,
-        evid = 1
+      # Generate individual parameters for all subjects
+      incProgress(0.1, detail = "Generating individual parameters...")
+      ind_params <- generate_individual_params(
+        params_typical,
+        input$n_subjects,
+        seed = input$seed
       )
 
-      incProgress(0.3, detail = "Creating dosing schedule...")
+      # Create dosing schedule (Teclistamab step-up regimen)
+      # Day 0: Step-up 1 (0.06 mg/kg)
+      # Day 3: Step-up 2 (0.3 mg/kg)
+      # Day 7+: Treatment doses weekly (1.5 mg/kg)
 
-      # Simulation time grid (hourly)
+      dose1_mg <- input$dose1 * bw
+      dose2_mg <- input$dose2 * bw
+      dose_treat_mg <- input$dose_treat * bw
+
+      # Treatment dose times (Day 7, 14, 21, ...)
+      treatment_times <- 7 * 24 + seq(0, (input$n_treatment_doses - 1) * 7 * 24, by = 7 * 24)
+
+      # All dose times and amounts
+      dose_times <- c(0, 3 * 24, treatment_times)  # in hours
+      dose_amounts <- c(dose1_mg, dose2_mg, rep(dose_treat_mg, input$n_treatment_doses))
+
+      incProgress(0.1, detail = "Creating dosing schedule...")
+
+      # Simulation end time
       max_time <- max(dose_times) + input$sim_duration * 24
-      sim_times <- seq(0, max_time, by = 1)
+      sim_times <- seq(0, max_time, by = 1)  # hourly
 
-      obs_data <- tibble(
-        ID = 1,
-        time = sim_times,
-        amt = 0,
-        cmt = 0,
-        evid = 0
+      # Run simulation for each subject
+      incProgress(0.1, detail = "Running simulations...")
+
+      all_results <- map_dfr(1:input$n_subjects, function(i) {
+
+        if (i %% 10 == 0) {
+          incProgress(0.5 / input$n_subjects * 10,
+                      detail = paste0("Simulating subject ", i, "/", input$n_subjects))
+        }
+
+        # Get individual parameters
+        ind_p <- ind_params %>% filter(ID == i)
+
+        # Dosing data for this subject
+        dosing_data <- tibble(
+          ID = i,
+          time = dose_times,
+          amt = dose_amounts,
+          cmt = 1,
+          evid = 1
+        )
+
+        # Observation data
+        obs_data <- tibble(
+          ID = i,
+          time = sim_times,
+          amt = 0,
+          cmt = 0,
+          evid = 0
+        )
+
+        sim_data <- bind_rows(dosing_data, obs_data) %>%
+          arrange(time, desc(evid))
+
+        # Update model parameters
+        mod_i <- mod %>%
+          param(
+            CL1 = ind_p$CL1,
+            CL2 = ind_p$CL2,
+            KDES = ind_p$KDES,
+            V1 = ind_p$V1,
+            V2 = ind_p$V2,
+            Q = ind_p$Q,
+            KA = ind_p$KA,
+            F1 = ind_p$F1
+          )
+
+        # Run simulation
+        out <- mod_i %>%
+          data_set(sim_data) %>%
+          mrgsim(carry_out = "amt,evid") %>%
+          as_tibble() %>%
+          filter(evid == 0) %>%
+          mutate(
+            TIME_HOUR = time,
+            TIME_DAY = time / 24
+          )
+
+        out
+      })
+
+      incProgress(0.2, detail = "Complete!")
+
+      # Dosing info for plot
+      dosing_info <- tibble(
+        time_day = dose_times / 24,
+        dose_mg = dose_amounts,
+        dose_type = c("Step-up 1", "Step-up 2", rep("Treatment", input$n_treatment_doses))
       )
-
-      sim_data <- bind_rows(dosing_data, obs_data) %>%
-        arrange(time, desc(evid))
-
-      incProgress(0.3, detail = "Running mrgsolve...")
-
-      # Update model with individual parameters
-      mod_i <- mod %>%
-        param(
-          CL1 = params$CL1,
-          CL2 = params$CL2,
-          KDES = params$KDES,
-          V1 = params$V1,
-          V2 = params$V2,
-          Q = params$Q,
-          KA = params$KA,
-          F1 = params$F1
-        )
-
-      # Run simulation
-      out <- mod_i %>%
-        data_set(sim_data) %>%
-        mrgsim(carry_out = "amt,evid") %>%
-        as_tibble() %>%
-        filter(evid == 0) %>%
-        mutate(
-          TIME_HOUR = time,
-          TIME_DAY = time / 24
-        )
-
-      incProgress(0.4, detail = "Complete!")
 
       list(
-        simulation = out,
-        dosing = dosing_data,
-        params = params
+        simulation = all_results,
+        dosing_info = dosing_info,
+        ind_params = ind_params,
+        typical_params = params_typical
       )
     })
   })
 
-  # Plot PK curve
+  # Plot PK curves
   output$pk_plot <- renderPlot({
     if (is.null(input$simulate) || input$simulate == 0) return(NULL)
     result <- sim_result()
     if (is.null(result)) return(NULL)
+
     sim_data <- result$simulation
-    dosing <- result$dosing
+    dosing_info <- result$dosing_info
 
-    # Dose times for vertical lines
-    dose_days <- dosing$time / 24
+    # Calculate summary statistics
+    summary_data <- sim_data %>%
+      group_by(TIME_DAY) %>%
+      summarise(
+        median = median(DV),
+        q5 = quantile(DV, 0.05),
+        q25 = quantile(DV, 0.25),
+        q75 = quantile(DV, 0.75),
+        q95 = quantile(DV, 0.95),
+        .groups = "drop"
+      )
 
-    ggplot(sim_data, aes(x = TIME_DAY, y = DV)) +
-      geom_line(color = "#667eea", linewidth = 1.2) +
-      geom_vline(xintercept = dose_days, linetype = "dashed",
-                 color = "#e74c3c", alpha = 0.5) +
+    # Plot
+    ggplot() +
+      # 90% prediction interval
+      geom_ribbon(data = summary_data,
+                  aes(x = TIME_DAY, ymin = q5, ymax = q95),
+                  fill = "#667eea", alpha = 0.2) +
+      # 50% prediction interval
+      geom_ribbon(data = summary_data,
+                  aes(x = TIME_DAY, ymin = q25, ymax = q75),
+                  fill = "#667eea", alpha = 0.3) +
+      # Median line
+      geom_line(data = summary_data,
+                aes(x = TIME_DAY, y = median),
+                color = "#667eea", linewidth = 1.2) +
+      # Dose markers
+      geom_vline(data = dosing_info,
+                 aes(xintercept = time_day, color = dose_type),
+                 linetype = "dashed", alpha = 0.7) +
+      scale_color_manual(values = c("Step-up 1" = "#e74c3c",
+                                    "Step-up 2" = "#f39c12",
+                                    "Treatment" = "#27ae60"),
+                         name = "Dose Type") +
       scale_y_log10(
         breaks = c(0.001, 0.01, 0.1, 1, 10, 100),
         labels = c("0.001", "0.01", "0.1", "1", "10", "100")
@@ -452,33 +597,40 @@ server <- function(input, output, session) {
       labs(
         x = "Time (days)",
         y = "Concentration (mg/L)",
-        title = paste0("Teclistamab PK Profile (", input$dose, " mg/kg, ",
-                       input$iss, " stage, ", input$igg_type, ")"),
-        subtitle = paste0("BW: ", input$bw, " kg | Dose: ",
-                          round(input$dose * input$bw, 1), " mg | ",
-                          input$n_doses, " doses")
+        title = paste0("Teclistamab PK Profile (n=", input$n_subjects, " subjects)"),
+        subtitle = paste0("BW: ", input$bw, " kg | ISS: ", input$iss,
+                          " | ", input$igg_type,
+                          "\nShaded: 90% PI (light) and 50% PI (dark), Line: Median")
       ) +
       theme_bw(base_size = 14) +
       theme(
         plot.title = element_text(face = "bold"),
+        plot.subtitle = element_text(size = 11, color = "gray40"),
         panel.grid.minor = element_line(color = "gray90"),
         legend.position = "bottom"
-      )
+      ) +
+      coord_cartesian(ylim = c(0.001, NA))
   })
 
-  # Calculate and display NCA parameters
+  # NCA table (First Dose)
   output$nca_table <- renderDT({
     if (is.null(input$simulate) || input$simulate == 0) return(NULL)
     result <- sim_result()
     if (is.null(result)) return(NULL)
-    nca_params <- calculate_nca(result$simulation)
 
-    if (is.null(nca_params)) {
+    nca_summary <- calculate_nca_summary(result$simulation)
+
+    if (is.null(nca_summary)) {
       return(NULL)
     }
 
-    nca_params %>%
-      mutate(Value = ifelse(is.na(Value), "N/A", sprintf("%.4f", Value))) %>%
+    nca_summary %>%
+      mutate(
+        Mean = signif(Mean, 4),
+        SD = signif(SD, 3),
+        `CV%` = round(`CV%`, 1),
+        Median = signif(Median, 4)
+      ) %>%
       datatable(
         options = list(
           dom = 't',
@@ -486,7 +638,12 @@ server <- function(input, output, session) {
           ordering = FALSE
         ),
         rownames = FALSE,
-        class = 'cell-border stripe'
+        class = 'cell-border stripe',
+        caption = htmltools::tags$caption(
+          style = 'caption-side: top; text-align: left; color: gray;',
+          paste0('NCA calculated for first dose interval (Day 0-3) across ',
+                 input$n_subjects, ' virtual subjects')
+        )
       )
   })
 }
