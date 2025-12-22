@@ -556,9 +556,10 @@ server <- function(input, output, session) {
     sim_data <- result$simulation
     dosing_info <- result$dosing_info
 
-    # Calculate summary statistics
+    # Calculate summary statistics (convert TIME_DAY back to 0-based for plotting)
     summary_data <- sim_data %>%
-      group_by(TIME_DAY) %>%
+      mutate(TIME_PLOT = TIME_DAY - 1) %>%  # Convert back to 0-based time
+      group_by(TIME_PLOT) %>%
       summarise(
         median = median(DV),
         q5 = quantile(DV, 0.05),
@@ -568,23 +569,27 @@ server <- function(input, output, session) {
         .groups = "drop"
       )
 
+    # Convert dosing times to 0-based for plotting
+    dosing_plot <- dosing_info %>%
+      mutate(time_plot = time_day - 1)
+
     # Plot
     ggplot() +
       # 90% prediction interval
       geom_ribbon(data = summary_data,
-                  aes(x = TIME_DAY, ymin = q5, ymax = q95),
+                  aes(x = TIME_PLOT, ymin = q5, ymax = q95),
                   fill = "#667eea", alpha = 0.2) +
       # 50% prediction interval
       geom_ribbon(data = summary_data,
-                  aes(x = TIME_DAY, ymin = q25, ymax = q75),
+                  aes(x = TIME_PLOT, ymin = q25, ymax = q75),
                   fill = "#667eea", alpha = 0.3) +
       # Median line
       geom_line(data = summary_data,
-                aes(x = TIME_DAY, y = median),
+                aes(x = TIME_PLOT, y = median),
                 color = "#667eea", linewidth = 1.2) +
       # Dose markers
-      geom_vline(data = dosing_info,
-                 aes(xintercept = time_day, color = dose_type),
+      geom_vline(data = dosing_plot,
+                 aes(xintercept = time_plot, color = dose_type),
                  linetype = "dashed", alpha = 0.7) +
       scale_color_manual(values = c("Step-up 1" = "#e74c3c",
                                     "Step-up 2" = "#f39c12",
