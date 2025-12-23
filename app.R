@@ -670,7 +670,7 @@ server <- function(input, output, session) {
       warnings <- c(warnings, list(
         div(class = "crs-metric crs-danger",
             icon("exclamation-triangle"),
-            strong(" CRS Grade II 위험 높음! "),
+            strong(" High CRS Grade II Risk! "),
             sprintf("Day 3 Cavg (%.4f µg/mL) ≥ 0.18 µg/mL", cavg_day3)
         )
       ))
@@ -678,7 +678,7 @@ server <- function(input, output, session) {
       infos <- c(infos, list(
         div(class = "crs-metric crs-safe",
             icon("check"),
-            sprintf(" Day 3 Cavg (%.4f µg/mL) < 0.18 µg/mL - 정상 범위", cavg_day3)
+            sprintf(" Day 3 Cavg (%.4f µg/mL) < 0.18 µg/mL - Within normal range", cavg_day3)
         )
       ))
     }
@@ -690,7 +690,7 @@ server <- function(input, output, session) {
         warnings <- c(warnings, list(
           div(class = "crs-metric crs-warning",
               icon("exclamation-circle"),
-              strong(" Efficacy 저하 우려 "),
+            strong(" Efficacy Concern "),
               sprintf("Day 5 Cavg (%.4f µg/mL) < 0.32 µg/mL", cavg_day5)
           )
         ))
@@ -699,7 +699,7 @@ server <- function(input, output, session) {
         warnings <- c(warnings, list(
           div(class = "crs-metric crs-danger",
               icon("exclamation-triangle"),
-              strong(" CRS 위험 높음! "),
+              strong(" High CRS Risk! "),
               sprintf("Day 5 Cavg (%.4f µg/mL) > 0.45 µg/mL", cavg_day5)
           )
         ))
@@ -722,7 +722,7 @@ server <- function(input, output, session) {
           infos,
           div(class = "crs-metric crs-safe",
               icon("thumbs-up"),
-              " 모든 CRS 위험 지표 정상 범위"
+              " All CRS risk indicators within normal range"
           )
       )
     } else {
