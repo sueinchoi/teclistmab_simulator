@@ -5,12 +5,11 @@
 # Calculate: Cavg, Cmax at 72hr, 120hr, 1st/3rd dosing intervals
 #
 # Model: 2-Compartment with Time-Dependent Clearance
+# Uses individual dosing data from mrgsolve_dosing_full.csv
 #===============================================================================
 
 library(mrgsolve)
 library(tidyverse)
-library(future)
-library(furrr)
 
 # Set seed for reproducibility
 set.seed(12345)
@@ -75,58 +74,53 @@ IIV_OMEGA <- list(
 )
 
 #-------------------------------------------------------------------------------
-# 3. Load Patient Parameters
+# 3. Load Patient Parameters and Dosing Data
 #-------------------------------------------------------------------------------
 
 params <- read_csv("mrgsolve_params_full.csv", show_col_types = FALSE)
 cat("\n=== Loaded", nrow(params), "patients ===\n")
 
-#-------------------------------------------------------------------------------
-# 4. Generate Dosing Schedule (Standard Teclistamab Step-up)
-#-------------------------------------------------------------------------------
+# Load individual dosing data
+dosing_all <- read_csv("mrgsolve_dosing_full.csv", show_col_types = FALSE) %>%
+  filter(TIME >= 0) %>%  # Remove invalid negative times
+  arrange(ID, TIME)
 
-generate_dosing <- function(bw, n_doses) {
-  # Standard Teclistamab dosing:
-  # Day 1: 0.06 mg/kg (Step-up 1)
-  # Day 4: 0.3 mg/kg (Step-up 2)
-  # Day 7+: 1.5 mg/kg weekly
+cat("=== Loaded dosing records for", n_distinct(dosing_all$ID), "patients ===\n")
 
-  dose_times <- c(0, 72)  # Day 1 (0hr), Day 4 (72hr)
-  dose_amounts <- c(0.06 * bw, 0.3 * bw)  # mg
-
-  # Add weekly treatment doses starting Day 7
-  if (n_doses > 2) {
-    treatment_times <- 144 + (0:(n_doses - 3)) * 168  # 168hr = 7 days
-    treatment_doses <- rep(1.5 * bw, n_doses - 2)
-    dose_times <- c(dose_times, treatment_times)
-    dose_amounts <- c(dose_amounts, treatment_doses)
-  }
-
-  tibble(
-    time = dose_times[1:min(n_doses, length(dose_times))],
-    amt = dose_amounts[1:min(n_doses, length(dose_amounts))],
-    cmt = 1,
-    evid = 1
+# Show dosing summary
+dosing_summary <- dosing_all %>%
+  group_by(ID) %>%
+  summarise(
+    N_doses = n(),
+    First_dose_time = min(TIME),
+    Last_dose_time = max(TIME),
+    Total_dose_mg = sum(AMT),
+    .groups = "drop"
   )
-}
+print(dosing_summary)
 
 #-------------------------------------------------------------------------------
-# 5. Monte Carlo Simulation Function
+# 4. Monte Carlo Simulation Function (Using Individual Dosing Data)
 #-------------------------------------------------------------------------------
 
-run_monte_carlo <- function(pt_id, params_df, n_sim = 1000, mod) {
+run_monte_carlo <- function(pt_id, params_df, dosing_df, n_sim = 1000, mod) {
 
   pt_params <- params_df %>% filter(ID == pt_id)
   if (nrow(pt_params) == 0) return(NULL)
 
-  bw <- pt_params$WT
-  n_doses <- pt_params$N_doses
+  # Get patient-specific dosing data
+  pt_dosing <- dosing_df %>%
+    filter(ID == pt_id) %>%
+    arrange(TIME) %>%
+    select(time = TIME, amt = AMT, cmt = CMT, evid = EVID)
 
-  # Generate dosing schedule
-  dosing <- generate_dosing(bw, n_doses)
+  if (nrow(pt_dosing) == 0) return(NULL)
+
+  # Get dosing times for interval calculations
+  dose_times <- pt_dosing$time
 
   # Simulation time: extend beyond last dose
-  max_time <- max(dosing$time) + 21 * 24  # Last dose + 21 days
+  max_time <- max(pt_dosing$time) + 21 * 24  # Last dose + 21 days
   sim_times <- seq(0, max_time, by = 1)  # Hourly
 
   # Store results for all simulations
@@ -153,7 +147,7 @@ run_monte_carlo <- function(pt_id, params_df, n_sim = 1000, mod) {
       evid = 0
     )
 
-    dosing_data <- dosing %>%
+    dosing_data <- pt_dosing %>%
       mutate(ID = 1)
 
     sim_data <- bind_rows(dosing_data, obs_data) %>%
@@ -189,11 +183,8 @@ run_monte_carlo <- function(pt_id, params_df, n_sim = 1000, mod) {
     mutate(
       PT_ID = pt_id,
       PID = pt_params$PID,
-      WT = bw
+      WT = pt_params$WT
     )
-
-  # Get dosing times for interval calculations
-  dose_times <- dosing$time
 
   list(
     simulations = combined,
@@ -203,7 +194,7 @@ run_monte_carlo <- function(pt_id, params_df, n_sim = 1000, mod) {
 }
 
 #-------------------------------------------------------------------------------
-# 6. PK Metrics Calculation Functions
+# 5. PK Metrics Calculation Functions
 #-------------------------------------------------------------------------------
 
 # Calculate Cmax and Cavg up to a specific hour
@@ -235,7 +226,7 @@ calc_metrics_up_to_hour <- function(sim_data, end_hour) {
 # Calculate Cmax and Cavg for a specific dosing interval
 calc_metrics_dosing_interval <- function(sim_data, dose_times, interval_num) {
   if (length(dose_times) < interval_num) {
-    return(tibble(SIM = unique(sim_data$SIM), Cmax = NA_real_, Cavg = NA_real_, AUC = NA_real_))
+    return(tibble(SIM = unique(sim_data$SIM), Cmax = NA_real_, Cavg = NA_real_, AUC = NA_real_, interval_hours = NA_real_))
   }
 
   start_time <- dose_times[interval_num]
@@ -268,25 +259,11 @@ calc_metrics_dosing_interval <- function(sim_data, dose_times, interval_num) {
       interval_hours = max(time) - min(time),
       .groups = "drop"
     ) %>%
-    mutate(Cavg = AUC / (interval_hours / 24))
-}
-
-# Summarize Monte Carlo results
-summarize_mc_results <- function(metrics_df, metric_name) {
-  metrics_df %>%
-    summarise(
-      Metric = metric_name,
-      Mean = mean(Cmax, na.rm = TRUE),
-      SD = sd(Cmax, na.rm = TRUE),
-      Median = median(Cmax, na.rm = TRUE),
-      Q5 = quantile(Cmax, 0.05, na.rm = TRUE),
-      Q95 = quantile(Cmax, 0.95, na.rm = TRUE),
-      .groups = "drop"
-    )
+    mutate(Cavg = ifelse(interval_hours > 0, AUC / (interval_hours / 24), NA_real_))
 }
 
 #-------------------------------------------------------------------------------
-# 7. Run Analysis for All Patients
+# 6. Run Analysis for All Patients
 #-------------------------------------------------------------------------------
 
 n_simulations <- 1000
@@ -303,7 +280,7 @@ for (i in 1:nrow(params)) {
               i, nrow(params), pt_id, params$PID[i]))
 
   # Run Monte Carlo simulation
-  mc_result <- run_monte_carlo(pt_id, params, n_sim = n_simulations, mod = mod)
+  mc_result <- run_monte_carlo(pt_id, params, dosing_all, n_sim = n_simulations, mod = mod)
 
   if (is.null(mc_result)) {
     cat("  Skipped (no data)\n")
@@ -329,7 +306,11 @@ for (i in 1:nrow(params)) {
     WT = pt_info$WT,
     ISS = pt_info$ISS,
     IGG = pt_info$IGG,
-    N_doses = pt_info$N_doses,
+    N_doses = length(dose_times),
+
+    # Dosing interval info
+    Dose1_interval_hr = ifelse(length(dose_times) >= 2, dose_times[2] - dose_times[1], NA_real_),
+    Dose3_interval_hr = ifelse(length(dose_times) >= 4, dose_times[4] - dose_times[3], NA_real_),
 
     # 72hr metrics
     Cmax_72hr_mean = mean(metrics_72hr$Cmax, na.rm = TRUE),
@@ -374,13 +355,14 @@ for (i in 1:nrow(params)) {
 
   all_results[[i]] <- pt_summary
 
-  cat(sprintf("  Cmax(72hr): %.4f [%.4f-%.4f], Cavg(72hr): %.4f [%.4f-%.4f]\n",
+  cat(sprintf("  Doses: %d, Cmax(72hr): %.4f [%.4f-%.4f], Cavg(72hr): %.4f [%.4f-%.4f]\n",
+              length(dose_times),
               pt_summary$Cmax_72hr_median, pt_summary$Cmax_72hr_q5, pt_summary$Cmax_72hr_q95,
               pt_summary$Cavg_72hr_median, pt_summary$Cavg_72hr_q5, pt_summary$Cavg_72hr_q95))
 }
 
 #-------------------------------------------------------------------------------
-# 8. Combine and Save Results
+# 7. Combine and Save Results
 #-------------------------------------------------------------------------------
 
 final_results <- bind_rows(all_results)
@@ -433,5 +415,17 @@ summary_table <- final_results %>%
   )
 
 print(t(summary_table))
+
+#-------------------------------------------------------------------------------
+# 8. Detailed Results Table
+#-------------------------------------------------------------------------------
+
+cat("\n=== Per-Patient Results ===\n")
+print(final_results %>%
+        select(ID, PID, WT, N_doses,
+               Cmax_72hr_median, Cavg_72hr_median,
+               Cmax_120hr_median, Cavg_120hr_median,
+               Cmax_dose1_median, Cavg_dose1_median,
+               Cmax_dose3_median, Cavg_dose3_median))
 
 cat("\n=== Done! ===\n")
