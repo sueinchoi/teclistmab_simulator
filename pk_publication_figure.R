@@ -447,16 +447,32 @@ panel_D <- ggplot(bar_data, aes(x = Exposure_Category, y = Rate, fill = Outcome)
 
 cat("\n=== Combining panels ===\n")
 
-# Add panel labels
-panel_A_labeled <- annotate_figure(panel_A, top = text_grob("A", face = "bold", size = 14, hjust = -0.5))
-panel_B_labeled <- annotate_figure(panel_B, top = text_grob("B", face = "bold", size = 14, hjust = -0.5))
-panel_C_labeled <- annotate_figure(panel_C, top = text_grob("C", face = "bold", size = 14, hjust = 0))
-panel_D_labeled <- annotate_figure(panel_D, top = text_grob("D", face = "bold", size = 14, hjust = 0))
+# Add panel labels to individual plots using labs(tag) for top-left positioning
+# Panel A (CRS and ICANS combined) - add label to first subplot
+p_crs <- p_crs + labs(tag = "A") +
+  theme(plot.tag = element_text(face = "bold", size = 14),
+        plot.tag.position = c(0, 1))
+
+p_vgpr <- p_vgpr + labs(tag = "B") +
+  theme(plot.tag = element_text(face = "bold", size = 14),
+        plot.tag.position = c(0, 1))
+
+panel_C <- panel_C + labs(tag = "C") +
+  theme(plot.tag = element_text(face = "bold", size = 14),
+        plot.tag.position = c(0, 1))
+
+panel_D <- panel_D + labs(tag = "D") +
+  theme(plot.tag = element_text(face = "bold", size = 14),
+        plot.tag.position = c(0, 1))
+
+# Recreate panel A and B with updated plots
+panel_A <- ggarrange(p_crs, p_icans, ncol = 2, nrow = 1, widths = c(1, 1))
+panel_B <- ggarrange(p_vgpr, p_pfs, ncol = 2, nrow = 1, widths = c(1, 1))
 
 # Combine into 2x2 layout
 final_figure <- ggarrange(
-  panel_A_labeled, panel_B_labeled,
-  panel_C_labeled, panel_D_labeled,
+  panel_A, panel_B,
+  panel_C, panel_D,
   ncol = 2, nrow = 2,
   heights = c(1, 1.2)
 )
