@@ -217,7 +217,7 @@ library(pROC)
 
 # Define thresholds
 CRS_THRESHOLD <- 90   # Maximum acceptable CRS rate (%)
-VGPR_MIN_THRESHOLD <- 50  # Minimum acceptable VGPR rate (%)
+VGPR_MIN_THRESHOLD <- 100  # Minimum acceptable VGPR rate (%)
 
 #--- Method 1: Constraint-based approach ---
 cat("\n--- Method 1: Constraint-Based Approach ---\n")
