@@ -5,6 +5,9 @@
 # 1. VGPR or better (≥VGPR) - Odds Ratio (Logistic Regression)
 # 2. 2-month PFS status - Odds Ratio (Logistic Regression)
 # 3. PFS - Hazard Ratio (Cox Regression)
+#
+# NOTE: Uses PK metrics from ae_pk_analysis.R (pk_ae_merged_results.csv)
+#       Run ae_pk_analysis.R first to generate the PK data
 #===============================================================================
 
 library(tidyverse)
@@ -19,75 +22,91 @@ cat("    Teclistamab PK-Response Association Analysis\n")
 cat("==========================================================\n\n")
 
 #-------------------------------------------------------------------------------
-# 1. Load Data
+# 1. Load PK Data from Previous Analysis
 #-------------------------------------------------------------------------------
 
 cat("Loading data...\n")
 
-# PK metrics data (from previous analysis)
-pk_data <- read_csv("pk_ae_merged_results.csv", show_col_types = FALSE)
-cat("  - Loaded PK data for", nrow(pk_data), "patients\n")
+# Load PK metrics from ae_pk_analysis.R output
+if (!file.exists("pk_ae_merged_results.csv")) {
+  stop("pk_ae_merged_results.csv not found! Run ae_pk_analysis.R first.")
+}
 
-# Response data
+pk_data <- read_csv("pk_ae_merged_results.csv", show_col_types = FALSE)
+cat("  - Loaded PK data for", nrow(pk_data), "patients from ae_pk_analysis.R\n")
+
+# Load dosing data to calculate treatment duration
+dosing_all <- read_csv("mrgsolve_dosing_full.csv", show_col_types = FALSE) %>%
+  filter(TIME >= 0) %>%
+  arrange(ID, TIME)
+
+# Load response data
 response_data <- read_csv("response_data.csv", show_col_types = FALSE)
 cat("  - Loaded response data for", nrow(response_data), "patients\n")
 
-# Merge data
-analysis_data <- pk_data %>%
-  left_join(response_data, by = "PID") %>%
-  mutate(
-    # VGPR or better (sCR, CR, VGPR)
-    VGPR_or_better = ifelse(RESP_CTX %in% c("sCR", "CR", "VGPR"), 1, 0),
-
-    # 2-month (60 days) PFS status: 1 = alive without progression at 2 months
-    PFS_2month = ifelse(DAYS_VS_PFS_CTX >= 60 | (VS_PFS_CTX == 0 & DAYS_VS_PFS_CTX < 60),
-                        ifelse(DAYS_VS_PFS_CTX >= 60 | VS_PFS_CTX == 0, 1, 0), 0),
-
-    # For Cox model: event and time
-    PFS_event = VS_PFS_CTX,  # 1 = event (progression/death), 0 = censored
-    PFS_time = DAYS_VS_PFS_CTX,
-
-    # Treatment duration (N_TEC_DOSES as proxy for weeks)
-    Treatment_weeks = N_TEC_DOSES  # Approximately 1 dose per week
-  )
-
-# Correct 2-month PFS calculation
-analysis_data <- analysis_data %>%
-  mutate(
-    PFS_2month = case_when(
-      DAYS_VS_PFS_CTX >= 60 ~ 1,  # Survived 2 months without event or with event after 2 months
-      VS_PFS_CTX == 0 ~ 1,        # Censored before 60 days but no event
-      VS_PFS_CTX == 1 & DAYS_VS_PFS_CTX < 60 ~ 0,  # Event before 60 days
-      TRUE ~ NA_real_
-    )
-  )
-
-cat("\n=== Data Summary ===\n")
-cat("Total patients:", nrow(analysis_data), "\n")
-
 #-------------------------------------------------------------------------------
-# 2. Filter: Patients with ≥4 weeks of treatment
+# 2. Calculate Treatment Duration and Filter for ≥4 Weeks
 #-------------------------------------------------------------------------------
 
 cat("\n=== Filtering for ≥4 weeks treatment ===\n")
 
-# Filter patients with at least 4 doses (approximately 4 weeks)
-filtered_data <- analysis_data %>%
-  filter(N_doses >= 4 | Treatment_weeks >= 4)
+# Calculate treatment duration per patient (max TIME in hours)
+treatment_duration <- dosing_all %>%
+  group_by(ID) %>%
+  summarise(
+    N_doses = n(),
+    Max_TIME_hr = max(TIME),
+    Treatment_days = max(TIME) / 24,
+    .groups = "drop"
+  )
 
-cat("Patients with ≥4 weeks treatment:", nrow(filtered_data), "\n")
+cat("\nTreatment Duration Summary:\n")
+print(treatment_duration)
 
-# Check if we have enough data
-if (nrow(filtered_data) < 10) {
-  cat("\nNote: Using N_doses >= 3 as alternative criteria\n")
-  filtered_data <- analysis_data %>%
-    filter(N_doses >= 3)
-  cat("Patients with ≥3 doses:", nrow(filtered_data), "\n")
+# Filter for ≥4 weeks treatment (28 days = 672 hours)
+patients_4weeks <- treatment_duration %>%
+  filter(Treatment_days >= 28)
+
+cat("\n>>> Patients with ≥4 weeks treatment:", nrow(patients_4weeks), "out of", nrow(treatment_duration), "<<<\n")
+
+if (nrow(patients_4weeks) == 0) {
+  stop("No patients with ≥4 weeks of treatment found!")
 }
 
+cat("\nFiltered patients IDs:", paste(patients_4weeks$ID, collapse = ", "), "\n")
+
+#-------------------------------------------------------------------------------
+# 3. Merge Data and Create Analysis Dataset
+#-------------------------------------------------------------------------------
+
+cat("\n=== Creating analysis dataset ===\n")
+
+# Filter PK data for ≥4 weeks patients and merge with response data
+filtered_data <- pk_data %>%
+  filter(ID %in% patients_4weeks$ID) %>%
+  left_join(response_data, by = "PID") %>%
+  left_join(patients_4weeks %>% select(ID, N_doses, Treatment_days), by = "ID") %>%
+  mutate(
+    # VGPR or better (sCR, CR, VGPR)
+    VGPR_or_better = ifelse(RESP_CTX %in% c("sCR", "CR", "VGPR"), 1, 0),
+
+    # 2-month (60 days) PFS status
+    PFS_2month = case_when(
+      DAYS_VS_PFS_CTX >= 60 ~ 1,
+      VS_PFS_CTX == 0 ~ 1,
+      VS_PFS_CTX == 1 & DAYS_VS_PFS_CTX < 60 ~ 0,
+      TRUE ~ NA_real_
+    ),
+
+    # For Cox model
+    PFS_event = VS_PFS_CTX,
+    PFS_time = DAYS_VS_PFS_CTX
+  )
+
 # Summary of response outcomes
-cat("\n=== Response Summary (filtered patients) ===\n")
-cat("Response distribution:\n")
+cat("\n=== Response Summary (patients with ≥4 weeks treatment) ===\n")
+cat("Total patients:", nrow(filtered_data), "\n")
+cat("\nResponse distribution:\n")
 print(table(filtered_data$RESP_CTX, useNA = "ifany"))
 
 cat("\nVGPR or better:\n")
@@ -104,14 +123,14 @@ write_csv(filtered_data, "pk_response_analysis_data.csv")
 cat("\nSaved filtered analysis data to: pk_response_analysis_data.csv\n")
 
 #-------------------------------------------------------------------------------
-# 3. Define PK Metrics for Analysis
+# 4. Define PK Metrics for Analysis
 #-------------------------------------------------------------------------------
 
 pk_metrics <- c("Cmax_72hr", "Cavg_72hr", "Cmax_120hr", "Cavg_120hr",
                 "Cmax_dose1", "Cavg_dose1", "Cmax_dose3", "Cavg_dose3")
 
 #-------------------------------------------------------------------------------
-# 4. Logistic Regression Function (for OR)
+# 5. Logistic Regression Function (for OR)
 #-------------------------------------------------------------------------------
 
 run_logistic_analysis <- function(data, outcome_var, pk_var, outcome_name) {
@@ -166,7 +185,7 @@ run_logistic_analysis <- function(data, outcome_var, pk_var, outcome_name) {
 }
 
 #-------------------------------------------------------------------------------
-# 5. Cox Regression Function (for HR)
+# 6. Cox Regression Function (for HR)
 #-------------------------------------------------------------------------------
 
 run_cox_analysis <- function(data, pk_var) {
@@ -212,7 +231,7 @@ run_cox_analysis <- function(data, pk_var) {
 }
 
 #-------------------------------------------------------------------------------
-# 6. Run Analyses
+# 7. Run Analyses
 #-------------------------------------------------------------------------------
 
 cat("\n")
@@ -220,7 +239,7 @@ cat("==========================================================\n")
 cat("             STATISTICAL ANALYSIS RESULTS\n")
 cat("==========================================================\n")
 
-# 6.1 VGPR or better (Logistic Regression - OR)
+# 7.1 VGPR or better (Logistic Regression - OR)
 cat("\n\n--- 1. VGPR or Better (≥VGPR) - Odds Ratio ---\n")
 
 vgpr_results <- map_dfr(pk_metrics, function(pk_var) {
@@ -233,7 +252,7 @@ if (nrow(vgpr_results) > 0) {
   cat("Insufficient data for VGPR analysis\n")
 }
 
-# 6.2 2-month PFS (Logistic Regression - OR)
+# 7.2 2-month PFS (Logistic Regression - OR)
 cat("\n\n--- 2. 2-Month PFS Status - Odds Ratio ---\n")
 
 pfs2m_results <- map_dfr(pk_metrics, function(pk_var) {
@@ -246,7 +265,7 @@ if (nrow(pfs2m_results) > 0) {
   cat("Insufficient data for 2-month PFS analysis\n")
 }
 
-# 6.3 PFS (Cox Regression - HR)
+# 7.3 PFS (Cox Regression - HR)
 cat("\n\n--- 3. Progression-Free Survival (PFS) - Hazard Ratio ---\n")
 
 pfs_results <- map_dfr(pk_metrics, function(pk_var) {
@@ -260,7 +279,7 @@ if (nrow(pfs_results) > 0) {
 }
 
 #-------------------------------------------------------------------------------
-# 7. Combine and Save Results
+# 8. Combine and Save Results
 #-------------------------------------------------------------------------------
 
 # Combine all results
@@ -276,7 +295,7 @@ write_csv(all_results, "pk_response_statistical_results.csv")
 cat("\n\nSaved all results to: pk_response_statistical_results.csv\n")
 
 #-------------------------------------------------------------------------------
-# 8. Create Forest Plots
+# 9. Create Forest Plots
 #-------------------------------------------------------------------------------
 
 cat("\n=== Creating Forest Plots ===\n")
@@ -344,7 +363,7 @@ if (nrow(pfs_results) > 0) {
 }
 
 #-------------------------------------------------------------------------------
-# 9. Summary Boxplots by Response
+# 10. Summary Boxplots by Response
 #-------------------------------------------------------------------------------
 
 cat("\nCreating boxplots by response...\n")
@@ -389,7 +408,7 @@ if (length(vgpr_plots) > 0) {
 }
 
 #-------------------------------------------------------------------------------
-# 10. Final Summary
+# 11. Final Summary
 #-------------------------------------------------------------------------------
 
 cat("\n")
