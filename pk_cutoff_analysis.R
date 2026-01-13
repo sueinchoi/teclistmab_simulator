@@ -71,7 +71,7 @@ cat("\n--- Data Summary ---\n")
 cat("Total patients:", nrow(analysis_data), "\n")
 cat("Patients with ≥6 doses:", sum(analysis_data$Has_6doses, na.rm = TRUE), "\n")
 cat("CRS any grade events:", sum(analysis_data$CRS_any, na.rm = TRUE), "\n")
-cat("VGPR+ responses (≥6 doses):", sum(analysis_data$VGPR_or_better[analysis_data$Has_6doses], na.rm = TRUE), "\n")
+cat("≥VGPR responses (≥6 doses):", sum(analysis_data$VGPR_or_better[analysis_data$Has_6doses], na.rm = TRUE), "\n")
 
 #-------------------------------------------------------------------------------
 # 3. Define Cut-off Range for Cavg_120hr
@@ -141,10 +141,10 @@ p1 <- ggplot(event_rate_results, aes(x = Cutoff)) +
   geom_line(aes(y = VGPR_rate_above), color = "#2ecc71", size = 1.5) +
   geom_point(aes(y = VGPR_rate_above), color = "#2ecc71", size = 2) +
   labs(
-    title = "VGPR+ Rate by Cavg_120hr Cut-off",
+    title = "≥VGPR Rate by Cavg_120hr Cut-off",
     subtitle = "Patients with Cavg_120hr ≥ cut-off (among ≥6 doses)",
     x = "Cavg_120hr Cut-off (mg/L)",
-    y = "VGPR+ Rate (%)"
+    y = "≥VGPR Rate (%)"
   ) +
   theme_bw(base_size = 12) +
   theme(plot.title = element_text(face = "bold"))
@@ -172,7 +172,7 @@ plot_data_long <- event_rate_results %>%
   ) %>%
   mutate(
     Outcome = case_when(
-      Outcome == "VGPR_rate_above" ~ "VGPR+ Response",
+      Outcome == "VGPR_rate_above" ~ "≥VGPR Response",
       Outcome == "CRS_rate_above" ~ "CRS Event"
     )
   )
@@ -180,9 +180,9 @@ plot_data_long <- event_rate_results %>%
 p3 <- ggplot(plot_data_long, aes(x = Cutoff, y = Rate, color = Outcome)) +
   geom_line(size = 1.5) +
   geom_point(size = 2) +
-  scale_color_manual(values = c("CRS Event" = "#e74c3c", "VGPR+ Response" = "#2ecc71")) +
+  scale_color_manual(values = c("CRS Event" = "#e74c3c", "≥VGPR Response" = "#2ecc71")) +
   labs(
-    title = "VGPR+ Response & CRS Rate by Cavg_120hr Cut-off",
+    title = "≥VGPR Response & CRS Rate by Cavg_120hr Cut-off",
     subtitle = "Finding optimal therapeutic window",
     x = "Cavg_120hr Cut-off (mg/L)",
     y = "Event Rate (%)",
@@ -421,7 +421,7 @@ vgpr_by_category <- analysis_data %>%
     .groups = "drop"
   )
 
-cat("\n--- VGPR+ Rate by Exposure Category (≥6 doses) ---\n")
+cat("\n--- ≥VGPR Rate by Exposure Category (≥6 doses) ---\n")
 print(vgpr_by_category)
 
 # Combined summary
@@ -450,7 +450,7 @@ bar_data <- bind_rows(
     mutate(Outcome = "CRS Event"),
   vgpr_by_category %>%
     select(Exposure_Category, Rate = VGPR_rate, N) %>%
-    mutate(Outcome = "VGPR+ Response")
+    mutate(Outcome = "≥VGPR Response")
 )
 
 # Bar plot
@@ -458,7 +458,7 @@ p_bar <- ggplot(bar_data, aes(x = Exposure_Category, y = Rate, fill = Outcome)) 
   geom_bar(stat = "identity", position = position_dodge(width = 0.8), width = 0.7) +
   geom_text(aes(label = sprintf("%.1f%%", Rate)),
             position = position_dodge(width = 0.8), vjust = -0.5, size = 3.5) +
-  scale_fill_manual(values = c("CRS Event" = "#e74c3c", "VGPR+ Response" = "#2ecc71")) +
+  scale_fill_manual(values = c("CRS Event" = "#e74c3c", "≥VGPR Response" = "#2ecc71")) +
   labs(
     title = "Event Rates by Cavg_120hr Exposure Category",
     subtitle = sprintf("Optimal Range: %.4f - %.4f mg/L", optimal_lower, optimal_upper),
@@ -497,11 +497,11 @@ p_vgpr_bar <- ggplot(vgpr_by_category, aes(x = Exposure_Category, y = VGPR_rate,
   geom_text(aes(label = sprintf("%.1f%%\n(n=%d)", VGPR_rate, N)), vjust = -0.3, size = 4) +
   scale_fill_manual(values = c("Low" = "#3498db", "Optimal" = "#2ecc71", "High" = "#e74c3c")) +
   labs(
-    title = "VGPR+ Response Rate by Exposure Category",
+    title = "≥VGPR Response Rate by Exposure Category",
     subtitle = sprintf("Low: <%.4f | Optimal: %.4f-%.4f | High: >%.4f (≥6 doses)",
                        optimal_lower, optimal_lower, optimal_upper, optimal_upper),
     x = "Cavg_120hr Category",
-    y = "VGPR+ Rate (%)"
+    y = "≥VGPR Rate (%)"
   ) +
   ylim(0, max(vgpr_by_category$VGPR_rate, na.rm = TRUE) * 1.25) +
   theme_bw(base_size = 12) +
@@ -524,7 +524,7 @@ p_combined_shaded <- ggplot(plot_data_long, aes(x = Cutoff, y = Rate, color = Ou
   geom_point(size = 2) +
   geom_vline(xintercept = optimal_lower, linetype = "dashed", color = "darkgreen", size = 0.8) +
   geom_vline(xintercept = optimal_upper, linetype = "dashed", color = "darkgreen", size = 0.8) +
-  scale_color_manual(values = c("CRS Event" = "#e74c3c", "VGPR+ Response" = "#2ecc71")) +
+  scale_color_manual(values = c("CRS Event" = "#e74c3c", "≥VGPR Response" = "#2ecc71")) +
   annotate("text", x = (optimal_lower + optimal_upper) / 2, y = 5,
            label = "Optimal\nRange", color = "darkgreen", fontface = "bold", size = 4) +
   labs(
@@ -555,7 +555,7 @@ cat("==========================================================\n\n")
 cat(sprintf("Optimal Therapeutic Range: %.4f - %.4f mg/L\n\n", optimal_lower, optimal_upper))
 
 cat("--- Event Rates by Category ---\n\n")
-cat("Exposure Category | CRS Rate (%) | VGPR+ Rate (%)\n")
+cat("Exposure Category | CRS Rate (%) | ≥VGPR Rate (%)\n")
 cat("------------------|--------------|---------------\n")
 for (i in 1:nrow(summary_by_category)) {
   row <- summary_by_category[i, ]
