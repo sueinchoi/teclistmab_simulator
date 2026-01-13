@@ -593,8 +593,7 @@ if (nrow(pfs2m_results) > 0) {
 
 # Forest plot for PFS HR
 if (nrow(pfs_results) > 0) {
-  pfs_plot_data <- pfs_results %>%
-    rename(OR = HR, OR_lower = HR_lower, OR_upper = HR_upper)
+  pfs_plot_data <- pfs_results 
   p_pfs <- create_forest_plot(pfs_plot_data, "Progression-Free Survival - Hazard Ratio", "HR")
   if (!is.null(p_pfs)) {
     ggsave("forest_PFS_HR.png", p_pfs, width = 10, height = 6, dpi = 200)
