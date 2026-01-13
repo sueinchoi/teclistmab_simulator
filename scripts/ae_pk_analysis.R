@@ -33,12 +33,12 @@ cat("==========================================================\n\n")
 cat("Loading pre-computed PK simulation results...\n")
 
 # Check if pre-computed results exist
-if (!file.exists("pk_ae_merged_results.csv")) {
+if (!file.exists("../output/tables/pk_ae_merged_results.csv")) {
   stop("ERROR: pk_ae_merged_results.csv not found!\n",
        "Please run pk_simulation.R first to generate PK simulation results.")
 }
 
-analysis_data <- read_csv("pk_ae_merged_results.csv", show_col_types = FALSE)
+analysis_data <- read_csv("../output/tables/pk_ae_merged_results.csv", show_col_types = FALSE)
 cat("  - Loaded", nrow(analysis_data), "patients from pk_ae_merged_results.csv\n")
 
 #-------------------------------------------------------------------------------
@@ -120,8 +120,8 @@ stat_results <- map_dfr(names(ae_vars), function(ae_label) {
 # Filter out NA results
 stat_results <- stat_results %>% filter(!is.na(`p-value`) | `AE+ (N)` > 0)
 
-write_csv(stat_results, "ae_pk_statistical_results.csv")
-cat("Saved statistical results to: ae_pk_statistical_results.csv\n")
+write_csv(stat_results, "../output/tables/ae_pk_statistical_results.csv")
+cat("Saved statistical results to: ../output/tables/ae_pk_statistical_results.csv\n")
 
 #-------------------------------------------------------------------------------
 # 5. Logistic Regression (OR) for CRS and Neurotoxicity
@@ -185,8 +185,8 @@ if (nrow(or_results) > 0) {
   cat("\n--- Logistic Regression OR Results ---\n")
   print(or_results %>% select(-OR), n = 100)
 
-  write_csv(or_results, "ae_pk_or_results.csv")
-  cat("\nSaved: ae_pk_or_results.csv\n")
+  write_csv(or_results, "../output/tables/ae_pk_or_results.csv")
+  cat("\nSaved: ../output/tables/ae_pk_or_results.csv\n")
 }
 
 #-------------------------------------------------------------------------------
@@ -261,8 +261,8 @@ if (nrow(cat_or_results) > 0) {
   cat("\n--- Categorical OR Results (Median Split) ---\n")
   print(cat_or_results %>% select(-OR), n = 100)
 
-  write_csv(cat_or_results, "ae_pk_categorical_or_results.csv")
-  cat("\nSaved: ae_pk_categorical_or_results.csv\n")
+  write_csv(cat_or_results, "../output/tables/ae_pk_categorical_or_results.csv")
+  cat("\nSaved: ../output/tables/ae_pk_categorical_or_results.csv\n")
 }
 
 #-------------------------------------------------------------------------------
@@ -385,8 +385,8 @@ if (length(ae_roc_results) > 0) {
 
   cat("\n--- AE Predictive Performance Summary ---\n")
   print(ae_roc_summary, n = 100)
-  write_csv(ae_roc_summary, "ae_pk_roc_results.csv")
-  cat("\nSaved: ae_pk_roc_results.csv\n")
+  write_csv(ae_roc_summary, "../output/tables/ae_pk_roc_results.csv")
+  cat("\nSaved: ../output/tables/ae_pk_roc_results.csv\n")
 }
 
 #-------------------------------------------------------------------------------
@@ -446,7 +446,7 @@ for (pk_var in pk_metrics) {
 
     combined_plot <- arrangeGrob(grobs = plots, ncol = ncol, nrow = nrow,
                                   top = paste0(pk_var, " by Adverse Event Status"))
-    ggsave(sprintf("boxplot_%s_by_AE.png", pk_var), combined_plot,
+    ggsave(sprintf("../output/figures/boxplot_%s_by_AE.png", pk_var), combined_plot,
            width = 16, height = 4 * nrow, dpi = 200)
   }
 }
@@ -471,7 +471,7 @@ for (pk_var in key_pk_metrics) {
 if (length(crs_plots) > 0) {
   crs_combined <- arrangeGrob(grobs = crs_plots, ncol = 2, nrow = 2,
                                top = "PK Metrics by CRS Status (All Grade)")
-  ggsave("boxplot_CRS_summary.png", crs_combined, width = 10, height = 10, dpi = 200)
+  ggsave("../output/figures/boxplot_CRS_summary.png", crs_combined, width = 10, height = 10, dpi = 200)
 }
 
 #-------------------------------------------------------------------------------

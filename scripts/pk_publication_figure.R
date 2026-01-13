@@ -26,15 +26,15 @@ cat("==========================================================\n\n")
 cat("Loading data...\n")
 
 # Load PK + AE merged data
-pk_ae_data <- read_csv("pk_ae_merged_results.csv", show_col_types = FALSE)
+pk_ae_data <- read_csv("../output/tables/pk_ae_merged_results.csv", show_col_types = FALSE)
 cat("  - Loaded PK+AE data for", nrow(pk_ae_data), "patients\n")
 
 # Load response data
-response_data <- read_csv("response_data.csv", show_col_types = FALSE)
+response_data <- read_csv("../data/response_data.csv", show_col_types = FALSE)
 cat("  - Loaded response data\n")
 
 # Load dosing data
-dosing_all <- read_csv("mrgsolve_dosing_full.csv", show_col_types = FALSE) %>%
+dosing_all <- read_csv("../output/tables/mrgsolve_dosing_full.csv", show_col_types = FALSE) %>%
   filter(TIME >= 0) %>%
   arrange(ID, TIME)
 
@@ -478,8 +478,8 @@ final_figure <- ggarrange(
 )
 
 # Save figure
-ggsave("publication_figure_4panel.png", final_figure, width = 12, height = 10, dpi = 300)
-ggsave("publication_figure_4panel.pdf", final_figure, width = 12, height = 10)
+ggsave("../output/figures/publication_figure_4panel.png", final_figure, width = 12, height = 10, dpi = 300)
+ggsave("../output/figures/publication_figure_4panel.pdf", final_figure, width = 12, height = 10)
 
 cat("\n==========================================================\n")
 cat("                    OUTPUT FILES\n")

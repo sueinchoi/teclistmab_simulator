@@ -34,20 +34,20 @@ cat("==========================================================\n\n")
 cat("Loading data...\n")
 
 # Load PK metrics from ae_pk_analysis.R output
-if (!file.exists("pk_ae_merged_results.csv")) {
+if (!file.exists("../output/tables/pk_ae_merged_results.csv")) {
   stop("pk_ae_merged_results.csv not found! Run ae_pk_analysis.R first.")
 }
 
-pk_data <- read_csv("pk_ae_merged_results.csv", show_col_types = FALSE)
+pk_data <- read_csv("../output/tables/pk_ae_merged_results.csv", show_col_types = FALSE)
 cat("  - Loaded PK data for", nrow(pk_data), "patients from ae_pk_analysis.R\n")
 
 # Load dosing data to calculate treatment duration
-dosing_all <- read_csv("mrgsolve_dosing_full.csv", show_col_types = FALSE) %>%
+dosing_all <- read_csv("../output/tables/mrgsolve_dosing_full.csv", show_col_types = FALSE) %>%
   filter(TIME >= 0) %>%
   arrange(ID, TIME)
 
 # Load response data
-response_data <- read_csv("response_data.csv", show_col_types = FALSE)
+response_data <- read_csv("../data/response_data.csv", show_col_types = FALSE)
 cat("  - Loaded response data for", nrow(response_data), "patients\n")
 
 #-------------------------------------------------------------------------------
@@ -125,8 +125,8 @@ cat("\nPFS events:\n")
 print(table(filtered_data$PFS_event, useNA = "ifany"))
 
 # Save filtered data
-write_csv(filtered_data, "pk_response_analysis_data.csv")
-cat("\nSaved filtered analysis data to: pk_response_analysis_data.csv\n")
+write_csv(filtered_data, "../output/tables/pk_response_analysis_data.csv")
+cat("\nSaved filtered analysis data to: ../output/tables/pk_response_analysis_data.csv\n")
 
 #-------------------------------------------------------------------------------
 # 4. Define PK Metrics for Analysis
@@ -362,8 +362,8 @@ if (nrow(vgpr_boxplot_stats) > 0) {
 if (length(vgpr_plots) > 0) {
   combined <- arrangeGrob(grobs = vgpr_plots, ncol = 4, nrow = 2,
                           top = "PK Metrics by VGPR Response (with Wilcoxon p-values)")
-  ggsave("boxplot_VGPR_wilcoxon.png", combined, width = 16, height = 8, dpi = 200)
-  cat("Saved: boxplot_VGPR_wilcoxon.png\n")
+  ggsave("../output/figures/boxplot_VGPR_wilcoxon.png", combined, width = 16, height = 8, dpi = 200)
+  cat("Saved: ../output/figures/boxplot_VGPR_wilcoxon.png\n")
 }
 
 # Create boxplots for 2-month PFS
@@ -382,8 +382,8 @@ if (nrow(pfs2m_boxplot_stats) > 0) {
 if (length(pfs2m_plots) > 0) {
   combined <- arrangeGrob(grobs = pfs2m_plots, ncol = 4, nrow = 2,
                           top = "PK Metrics by 2-Month PFS Status (with Wilcoxon p-values)")
-  ggsave("boxplot_2monthPFS_wilcoxon.png", combined, width = 16, height = 8, dpi = 200)
-  cat("Saved: boxplot_2monthPFS_wilcoxon.png\n")
+  ggsave("../output/figures/boxplot_2monthPFS_wilcoxon.png", combined, width = 16, height = 8, dpi = 200)
+  cat("Saved: ../output/figures/boxplot_2monthPFS_wilcoxon.png\n")
 }
 
 #-------------------------------------------------------------------------------
@@ -533,8 +533,8 @@ all_results <- bind_rows(
     mutate(Analysis = "Cox (HR)")
 )
 
-write_csv(all_results, "pk_response_statistical_results.csv")
-cat("\n\nSaved all results to: pk_response_statistical_results.csv\n")
+write_csv(all_results, "../output/tables/pk_response_statistical_results.csv")
+cat("\n\nSaved all results to: ../output/tables/pk_response_statistical_results.csv\n")
 
 #-------------------------------------------------------------------------------
 # 11. Create Forest Plots
@@ -579,8 +579,8 @@ create_forest_plot <- function(results, title, estimate_type = "OR") {
 if (nrow(vgpr_results) > 0) {
   p_vgpr <- create_forest_plot(vgpr_results, "VGPR or Better - Odds Ratio", "OR")
   if (!is.null(p_vgpr)) {
-    ggsave("forest_VGPR_OR.png", p_vgpr, width = 10, height = 6, dpi = 200)
-    cat("Saved: forest_VGPR_OR.png\n")
+    ggsave("../output/figures/forest_VGPR_OR.png", p_vgpr, width = 10, height = 6, dpi = 200)
+    cat("Saved: ../output/figures/forest_VGPR_OR.png\n")
   }
 }
 
@@ -588,18 +588,18 @@ if (nrow(vgpr_results) > 0) {
 if (nrow(pfs2m_results) > 0) {
   p_pfs2m <- create_forest_plot(pfs2m_results, "2-Month PFS - Odds Ratio", "OR")
   if (!is.null(p_pfs2m)) {
-    ggsave("forest_2monthPFS_OR.png", p_pfs2m, width = 10, height = 6, dpi = 200)
-    cat("Saved: forest_2monthPFS_OR.png\n")
+    ggsave("../output/figures/forest_2monthPFS_OR.png", p_pfs2m, width = 10, height = 6, dpi = 200)
+    cat("Saved: ../output/figures/forest_2monthPFS_OR.png\n")
   }
 }
 
 # Forest plot for PFS HR
 if (nrow(pfs_results) > 0) {
-  pfs_plot_data <- pfs_results 
+  pfs_plot_data <- pfs_results
   p_pfs <- create_forest_plot(pfs_plot_data, "Progression-Free Survival - Hazard Ratio", "HR")
   if (!is.null(p_pfs)) {
-    ggsave("forest_PFS_HR.png", p_pfs, width = 10, height = 6, dpi = 200)
-    cat("Saved: forest_PFS_HR.png\n")
+    ggsave("../output/figures/forest_PFS_HR.png", p_pfs, width = 10, height = 6, dpi = 200)
+    cat("Saved: ../output/figures/forest_PFS_HR.png\n")
   }
 }
 
@@ -720,8 +720,8 @@ if (length(roc_results) > 0) {
 
   cat("\n--- Predictive Performance Summary ---\n")
   print(roc_summary, n = 100)
-  write_csv(roc_summary, "pk_response_roc_results.csv")
-  cat("\nSaved: pk_response_roc_results.csv\n")
+  write_csv(roc_summary, "../output/tables/pk_response_roc_results.csv")
+  cat("\nSaved: ../output/tables/pk_response_roc_results.csv\n")
 }
 
 #-------------------------------------------------------------------------------
