@@ -1,7 +1,7 @@
 #===============================================================================
 # Teclistamab PK-Response Association Analysis
 #
-# For patients with ≥4 weeks of treatment:
+# For patients with ≥6 doses:
 # 1. VGPR or better (≥VGPR) - Odds Ratio (Logistic Regression)
 # 2. 2-month PFS status - Odds Ratio (Logistic Regression)
 # 3. PFS - Hazard Ratio (Cox Regression)
@@ -51,10 +51,10 @@ response_data <- read_csv("response_data.csv", show_col_types = FALSE)
 cat("  - Loaded response data for", nrow(response_data), "patients\n")
 
 #-------------------------------------------------------------------------------
-# 2. Calculate Treatment Duration and Filter for ≥4 Weeks
+# 2. Calculate Treatment Duration and Filter for ≥6 Doses
 #-------------------------------------------------------------------------------
 
-cat("\n=== Filtering for ≥4 weeks treatment ===\n")
+cat("\n=== Filtering for ≥6 doses ===\n")
 
 # Calculate treatment duration per patient (max TIME in hours)
 treatment_duration <- dosing_all %>%
@@ -69,17 +69,17 @@ treatment_duration <- dosing_all %>%
 cat("\nTreatment Duration Summary:\n")
 print(treatment_duration)
 
-# Filter for ≥4 weeks treatment (28 days = 672 hours)
-patients_4weeks <- treatment_duration %>%
-  filter(Treatment_days >= 28)
+# Filter for ≥6 doses
+patients_filtered <- treatment_duration %>%
+  filter(N_doses >= 6)
 
-cat("\n>>> Patients with ≥4 weeks treatment:", nrow(patients_4weeks), "out of", nrow(treatment_duration), "<<<\n")
+cat("\n>>> Patients with ≥6 doses:", nrow(patients_filtered), "out of", nrow(treatment_duration), "<<<\n")
 
-if (nrow(patients_4weeks) == 0) {
-  stop("No patients with ≥4 weeks of treatment found!")
+if (nrow(patients_filtered) == 0) {
+  stop("No patients with ≥6 doses found!")
 }
 
-cat("\nFiltered patients IDs:", paste(patients_4weeks$ID, collapse = ", "), "\n")
+cat("\nFiltered patients IDs:", paste(patients_filtered$ID, collapse = ", "), "\n")
 
 #-------------------------------------------------------------------------------
 # 3. Merge Data and Create Analysis Dataset
@@ -87,11 +87,11 @@ cat("\nFiltered patients IDs:", paste(patients_4weeks$ID, collapse = ", "), "\n"
 
 cat("\n=== Creating analysis dataset ===\n")
 
-# Filter PK data for ≥4 weeks patients and merge with response data
+# Filter PK data for ≥6 doses patients and merge with response data
 filtered_data <- pk_data %>%
-  filter(ID %in% patients_4weeks$ID) %>%
+  filter(ID %in% patients_filtered$ID) %>%
   left_join(response_data, by = "PID") %>%
-  left_join(patients_4weeks %>% select(ID, N_doses, Treatment_days), by = "ID") %>%
+  left_join(patients_filtered %>% select(ID, N_doses, Treatment_days), by = "ID") %>%
   mutate(
     # VGPR or better (sCR, CR, VGPR)
     VGPR_or_better = ifelse(RESP_CTX %in% c("sCR", "CR", "VGPR"), 1, 0),
@@ -110,7 +110,7 @@ filtered_data <- pk_data %>%
   )
 
 # Summary of response outcomes
-cat("\n=== Response Summary (patients with ≥4 weeks treatment) ===\n")
+cat("\n=== Response Summary (patients with ≥6 doses) ===\n")
 cat("Total patients:", nrow(filtered_data), "\n")
 cat("\nResponse distribution:\n")
 print(table(filtered_data$RESP_CTX, useNA = "ifany"))
@@ -732,7 +732,7 @@ cat("                    FINAL SUMMARY\n")
 cat("==========================================================\n\n")
 
 cat("Analysis Population:\n")
-cat("  - Patients with ≥4 weeks treatment:", nrow(filtered_data), "\n")
+cat("  - Patients with ≥6 doses:", nrow(filtered_data), "\n")
 cat("  - Patients with response data:", sum(!is.na(filtered_data$RESP_CTX)), "\n")
 cat("  - Patients with PFS data:", sum(!is.na(filtered_data$PFS_time)), "\n")
 
