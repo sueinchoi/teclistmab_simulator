@@ -4,7 +4,9 @@
 # Generate:
 # 1. Cut-off comparison table with performance metrics
 # 2. ROC curves for Response (≥VGPR), CRS (any grade), CRS (Grade 2+)
-# 3. Optimal cut-off selection based on Youden's Index
+# 3. Optimal cut-off selection:
+#    - Response (≥VGPR): Youden's Index
+#    - CRS (any grade, Grade 2+): Accuracy
 #
 # PREREQUISITE: Run pk_simulation.R first
 #===============================================================================
@@ -163,35 +165,45 @@ crs_data <- analysis_data %>%
 cat("Patients for CRS analysis:", nrow(crs_data), "\n")
 cat("CRS events:", sum(crs_data$CRS_any), "\n")
 
-# ROC curve FIRST to get optimal threshold
+# ROC curve
 roc_crs <- roc(crs_data$CRS_any, crs_data$Cavg_120hr, quiet = TRUE)
 auc_crs <- auc(roc_crs)
 ci_crs <- ci.auc(roc_crs)
-coords_crs <- coords(roc_crs, "best", ret = c("threshold", "sensitivity", "specificity"),
-                     best.method = "youden")
 
 cat(sprintf("ROC AUC: %.3f (%.3f-%.3f)\n", auc_crs, ci_crs[1], ci_crs[3]))
-cat(sprintf("ROC Optimal Threshold (Youden): %.3f\n", coords_crs$threshold))
 
-# Define cut-offs - include ROC optimal threshold
-cutoffs_crs <- sort(unique(c(seq(0.15, 0.55, by = 0.05), coords_crs$threshold)))
+# Define cut-offs
+cutoffs_crs <- seq(0.15, 0.55, by = 0.05)
 
 # Calculate metrics
 crs_metrics <- calc_cutoff_metrics(crs_data, "CRS_any", "Cavg_120hr", cutoffs_crs)
 
-# Mark the ROC optimal cut-off
-crs_metrics <- crs_metrics %>%
-  mutate(Optimal = ifelse(abs(Cutoff - coords_crs$threshold) < 0.001, "***", ""))
-
-# Find optimal cut-off
+# Find optimal cut-off by ACCURACY (not Youden's J)
 optimal_crs <- crs_metrics %>%
-  filter(!is.na(`Youden's J`)) %>%
-  arrange(desc(`Youden's J`)) %>%
+  filter(!is.na(Accuracy)) %>%
+  arrange(desc(Accuracy)) %>%
   head(1)
+
+# Add optimal cut-off to the list if not already present
+if (!any(abs(cutoffs_crs - optimal_crs$Cutoff) < 0.001)) {
+  cutoffs_crs <- sort(unique(c(cutoffs_crs, optimal_crs$Cutoff)))
+  crs_metrics <- calc_cutoff_metrics(crs_data, "CRS_any", "Cavg_120hr", cutoffs_crs)
+}
+
+# Mark the optimal cut-off (by Accuracy)
+crs_metrics <- crs_metrics %>%
+  mutate(Optimal = ifelse(abs(Cutoff - optimal_crs$Cutoff) < 0.001, "***", ""))
+
+# Create coords_crs for ROC plot (using Accuracy-based optimal)
+coords_crs <- list(
+  threshold = optimal_crs$Cutoff,
+  sensitivity = optimal_crs$Sensitivity,
+  specificity = optimal_crs$Specificity
+)
 
 cat("\n--- CRS (any grade) Cut-off Comparison ---\n")
 print(crs_metrics, n = 20)
-cat(sprintf("\n>>> Optimal Cut-off (Youden's J): %.3f <<<\n", coords_crs$threshold))
+cat(sprintf("\n>>> Optimal Cut-off (Accuracy): %.3f <<<\n", optimal_crs$Cutoff))
 
 #-------------------------------------------------------------------------------
 # 6. CRS (Grade 2+) Analysis
@@ -205,35 +217,45 @@ crs_gr2_data <- analysis_data %>%
 cat("Patients for CRS Gr2+ analysis:", nrow(crs_gr2_data), "\n")
 cat("CRS Gr2+ events:", sum(crs_gr2_data$CRS_gr2), "\n")
 
-# ROC curve FIRST to get optimal threshold
+# ROC curve
 roc_crs_gr2 <- roc(crs_gr2_data$CRS_gr2, crs_gr2_data$Cavg_120hr, quiet = TRUE)
 auc_crs_gr2 <- auc(roc_crs_gr2)
 ci_crs_gr2 <- ci.auc(roc_crs_gr2)
-coords_crs_gr2 <- coords(roc_crs_gr2, "best", ret = c("threshold", "sensitivity", "specificity"),
-                         best.method = "youden")
 
 cat(sprintf("ROC AUC: %.3f (%.3f-%.3f)\n", auc_crs_gr2, ci_crs_gr2[1], ci_crs_gr2[3]))
-cat(sprintf("ROC Optimal Threshold (Youden): %.3f\n", coords_crs_gr2$threshold))
 
-# Define cut-offs - include ROC optimal threshold
-cutoffs_crs_gr2 <- sort(unique(c(seq(0.15, 0.55, by = 0.05), coords_crs_gr2$threshold)))
+# Define cut-offs
+cutoffs_crs_gr2 <- seq(0.15, 0.55, by = 0.05)
 
 # Calculate metrics
 crs_gr2_metrics <- calc_cutoff_metrics(crs_gr2_data, "CRS_gr2", "Cavg_120hr", cutoffs_crs_gr2)
 
-# Mark the ROC optimal cut-off
-crs_gr2_metrics <- crs_gr2_metrics %>%
-  mutate(Optimal = ifelse(abs(Cutoff - coords_crs_gr2$threshold) < 0.001, "***", ""))
-
-# Find optimal cut-off
+# Find optimal cut-off by ACCURACY (not Youden's J)
 optimal_crs_gr2 <- crs_gr2_metrics %>%
-  filter(!is.na(`Youden's J`)) %>%
-  arrange(desc(`Youden's J`)) %>%
+  filter(!is.na(Accuracy)) %>%
+  arrange(desc(Accuracy)) %>%
   head(1)
+
+# Add optimal cut-off to the list if not already present
+if (!any(abs(cutoffs_crs_gr2 - optimal_crs_gr2$Cutoff) < 0.001)) {
+  cutoffs_crs_gr2 <- sort(unique(c(cutoffs_crs_gr2, optimal_crs_gr2$Cutoff)))
+  crs_gr2_metrics <- calc_cutoff_metrics(crs_gr2_data, "CRS_gr2", "Cavg_120hr", cutoffs_crs_gr2)
+}
+
+# Mark the optimal cut-off (by Accuracy)
+crs_gr2_metrics <- crs_gr2_metrics %>%
+  mutate(Optimal = ifelse(abs(Cutoff - optimal_crs_gr2$Cutoff) < 0.001, "***", ""))
+
+# Create coords_crs_gr2 for ROC plot (using Accuracy-based optimal)
+coords_crs_gr2 <- list(
+  threshold = optimal_crs_gr2$Cutoff,
+  sensitivity = optimal_crs_gr2$Sensitivity,
+  specificity = optimal_crs_gr2$Specificity
+)
 
 cat("\n--- CRS (Grade 2+) Cut-off Comparison ---\n")
 print(crs_gr2_metrics, n = 20)
-cat(sprintf("\n>>> Optimal Cut-off (Youden's J): %.3f <<<\n", coords_crs_gr2$threshold))
+cat(sprintf("\n>>> Optimal Cut-off (Accuracy): %.3f <<<\n", optimal_crs_gr2$Cutoff))
 
 #-------------------------------------------------------------------------------
 # 7. Create ROC Curve Plots
@@ -242,7 +264,7 @@ cat(sprintf("\n>>> Optimal Cut-off (Youden's J): %.3f <<<\n", coords_crs_gr2$thr
 cat("\n=== Creating ROC Curves ===\n")
 
 # Function to create ROC plot
-create_roc_plot <- function(roc_obj, auc_val, ci_vals, optimal_coords, title, color) {
+create_roc_plot <- function(roc_obj, auc_val, ci_vals, optimal_coords, title, color, method = "Youden") {
 
   # Extract ROC data and sort properly for step plot
   roc_df <- data.frame(
@@ -254,7 +276,7 @@ create_roc_plot <- function(roc_obj, auc_val, ci_vals, optimal_coords, title, co
 
   # AUC label
   auc_label <- sprintf("AUC = %.3f (%.3f-%.3f)", auc_val, ci_vals[1], ci_vals[3])
-  optimal_label <- sprintf("Optimal: %.3f", optimal_coords$threshold)
+  optimal_label <- sprintf("Optimal (%s): %.3f", method, optimal_coords$threshold)
 
   ggplot(roc_df, aes(x = fpr, y = sensitivity)) +
     geom_step(color = color, size = 1.2, direction = "vh") +
@@ -292,12 +314,12 @@ p_roc_response <- create_roc_plot(
 
 p_roc_crs <- create_roc_plot(
   roc_crs, auc_crs, ci_crs, coords_crs,
-  "B. CRS (any grade)", "#3498db"
+  "B. CRS (any grade)", "#3498db", method = "Accuracy"
 )
 
 p_roc_crs_gr2 <- create_roc_plot(
   roc_crs_gr2, auc_crs_gr2, ci_crs_gr2, coords_crs_gr2,
-  "C. CRS (Grade 2+)", "#e74c3c"
+  "C. CRS (Grade 2+)", "#e74c3c", method = "Accuracy"
 )
 
 # Combine ROC plots
@@ -345,25 +367,31 @@ cat("Saved: cutoff_metrics_crs_any.csv\n")
 cat("Saved: cutoff_metrics_crs_gr2.csv\n")
 
 #-------------------------------------------------------------------------------
-# 9. Summary Table (Optimal Cut-offs) - Using ROC-based Youden's Index
+# 9. Summary Table (Optimal Cut-offs)
+#    - Response: Youden's Index
+#    - CRS: Accuracy
 #-------------------------------------------------------------------------------
 
-cat("\n=== Optimal Cut-off Summary (Youden's Index from ROC) ===\n")
+cat("\n=== Optimal Cut-off Summary ===\n")
+cat("  Response: Youden's Index | CRS: Accuracy\n")
 
-# Get metrics at the ROC optimal thresholds
+# Get metrics at the optimal thresholds
 optimal_response_roc <- response_metrics %>% filter(abs(Cutoff - coords_response$threshold) < 0.001)
 optimal_crs_roc <- crs_metrics %>% filter(abs(Cutoff - coords_crs$threshold) < 0.001)
 optimal_crs_gr2_roc <- crs_gr2_metrics %>% filter(abs(Cutoff - coords_crs_gr2$threshold) < 0.001)
 
 optimal_summary <- bind_rows(
   optimal_response_roc %>% mutate(Outcome = "Response (≥VGPR)",
+                               Method = "Youden",
                                AUC = sprintf("%.3f (%.3f-%.3f)", auc_response, ci_response[1], ci_response[3])),
   optimal_crs_roc %>% mutate(Outcome = "CRS (any grade)",
+                          Method = "Accuracy",
                           AUC = sprintf("%.3f (%.3f-%.3f)", auc_crs, ci_crs[1], ci_crs[3])),
   optimal_crs_gr2_roc %>% mutate(Outcome = "CRS (Grade 2+)",
+                              Method = "Accuracy",
                               AUC = sprintf("%.3f (%.3f-%.3f)", auc_crs_gr2, ci_crs_gr2[1], ci_crs_gr2[3]))
 ) %>%
-  select(Outcome, Cutoff, AUC, Sensitivity, Specificity, `Youden's J`, PPV, NPV, Accuracy, `F1 Score`, `LR+`, `LR-`)
+  select(Outcome, Method, Cutoff, AUC, Sensitivity, Specificity, `Youden's J`, PPV, NPV, Accuracy, `F1 Score`, `LR+`, `LR-`)
 
 cat("\n")
 print(optimal_summary, width = Inf)
@@ -380,23 +408,23 @@ cat("==========================================================\n")
 cat("              OPTIMAL CUT-OFF SUMMARY\n")
 cat("==========================================================\n\n")
 
-cat(sprintf("Response (≥VGPR):\n"))
+cat(sprintf("Response (≥VGPR): [Youden's Index]\n"))
 cat(sprintf("  Optimal Cut-off: %.3f μg/mL\n", coords_response$threshold))
 cat(sprintf("  AUC: %.3f (%.3f-%.3f)\n", auc_response, ci_response[1], ci_response[3]))
 cat(sprintf("  Sensitivity: %.3f, Specificity: %.3f\n", coords_response$sensitivity, coords_response$specificity))
 cat(sprintf("  Youden's J: %.3f\n\n", coords_response$sensitivity + coords_response$specificity - 1))
 
-cat(sprintf("CRS (any grade):\n"))
+cat(sprintf("CRS (any grade): [Accuracy]\n"))
 cat(sprintf("  Optimal Cut-off: %.3f μg/mL\n", coords_crs$threshold))
 cat(sprintf("  AUC: %.3f (%.3f-%.3f)\n", auc_crs, ci_crs[1], ci_crs[3]))
 cat(sprintf("  Sensitivity: %.3f, Specificity: %.3f\n", coords_crs$sensitivity, coords_crs$specificity))
-cat(sprintf("  Youden's J: %.3f\n\n", coords_crs$sensitivity + coords_crs$specificity - 1))
+cat(sprintf("  Accuracy: %.3f\n\n", optimal_crs$Accuracy))
 
-cat(sprintf("CRS (Grade 2+):\n"))
+cat(sprintf("CRS (Grade 2+): [Accuracy]\n"))
 cat(sprintf("  Optimal Cut-off: %.3f μg/mL\n", coords_crs_gr2$threshold))
 cat(sprintf("  AUC: %.3f (%.3f-%.3f)\n", auc_crs_gr2, ci_crs_gr2[1], ci_crs_gr2[3]))
 cat(sprintf("  Sensitivity: %.3f, Specificity: %.3f\n", coords_crs_gr2$sensitivity, coords_crs_gr2$specificity))
-cat(sprintf("  Youden's J: %.3f\n", coords_crs_gr2$sensitivity + coords_crs_gr2$specificity - 1))
+cat(sprintf("  Accuracy: %.3f\n", optimal_crs_gr2$Accuracy))
 
 cat("\n==========================================================\n")
 cat("                    OUTPUT FILES\n")
