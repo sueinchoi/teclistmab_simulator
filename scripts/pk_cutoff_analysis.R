@@ -25,20 +25,20 @@ cat("==========================================================\n\n")
 cat("Loading data...\n")
 
 # Load PK + AE merged data
-if (!file.exists("../output/tables/pk_ae_merged_results.csv")) {
+if (!file.exists("output/tables/pk_ae_merged_results.csv")) {
   stop("ERROR: pk_ae_merged_results.csv not found!\n",
        "Please run pk_simulation.R first.")
 }
 
-pk_ae_data <- read_csv("../output/tables/pk_ae_merged_results.csv", show_col_types = FALSE)
+pk_ae_data <- read_csv("output/tables/pk_ae_merged_results.csv", show_col_types = FALSE)
 cat("  - Loaded PK+AE data for", nrow(pk_ae_data), "patients\n")
 
 # Load response data
-response_data <- read_csv("../data/response_data.csv", show_col_types = FALSE)
+response_data <- read_csv("data/response_data.csv", show_col_types = FALSE)
 cat("  - Loaded response data for", nrow(response_data), "patients\n")
 
 # Load dosing data to filter for ≥6 doses
-dosing_all <- read_csv("../output/tables/mrgsolve_dosing_full.csv", show_col_types = FALSE) %>%
+dosing_all <- read_csv("output/tables/mrgsolve_dosing_full.csv", show_col_types = FALSE) %>%
   filter(TIME >= 0) %>%
   arrange(ID, TIME)
 
@@ -194,13 +194,13 @@ p3 <- ggplot(plot_data_long, aes(x = Cutoff, y = Rate, color = Outcome)) +
     legend.position = "bottom"
   )
 
-ggsave("../output/figures/cutoff_VGPR_rate.png", p1, width = 8, height = 6, dpi = 200)
-ggsave("../output/figures/cutoff_CRS_rate.png", p2, width = 8, height = 6, dpi = 200)
-ggsave("../output/figures/cutoff_combined_rates.png", p3, width = 10, height = 7, dpi = 200)
+ggsave("output/figures/cutoff_VGPR_rate.png", p1, width = 8, height = 6, dpi = 200)
+ggsave("output/figures/cutoff_CRS_rate.png", p2, width = 8, height = 6, dpi = 200)
+ggsave("output/figures/cutoff_combined_rates.png", p3, width = 10, height = 7, dpi = 200)
 
-cat("Saved: ../output/figures/cutoff_VGPR_rate.png\n")
-cat("Saved: ../output/figures/cutoff_CRS_rate.png\n")
-cat("Saved: ../output/figures/cutoff_combined_rates.png\n")
+cat("Saved: output/figures/cutoff_VGPR_rate.png\n")
+cat("Saved: output/figures/cutoff_CRS_rate.png\n")
+cat("Saved: output/figures/cutoff_combined_rates.png\n")
 
 #-------------------------------------------------------------------------------
 # 6. Find Optimal Range Using Benefit-Risk Analysis
@@ -434,8 +434,8 @@ summary_by_category <- crs_by_category %>%
 cat("\n--- Combined Summary ---\n")
 print(summary_by_category)
 
-write_csv(summary_by_category, "../output/tables/pk_cutoff_category_summary.csv")
-cat("\nSaved: ../output/tables/pk_cutoff_category_summary.csv\n")
+write_csv(summary_by_category, "output/tables/pk_cutoff_category_summary.csv")
+cat("\nSaved: output/tables/pk_cutoff_category_summary.csv\n")
 
 #-------------------------------------------------------------------------------
 # 9. Create Bar Plot for Event Rates by Category
@@ -473,8 +473,8 @@ p_bar <- ggplot(bar_data, aes(x = Exposure_Category, y = Rate, fill = Outcome)) 
     legend.position = "bottom"
   )
 
-ggsave("../output/figures/cutoff_category_barplot.png", p_bar, width = 10, height = 7, dpi = 200)
-cat("Saved: ../output/figures/cutoff_category_barplot.png\n")
+ggsave("output/figures/cutoff_category_barplot.png", p_bar, width = 10, height = 7, dpi = 200)
+cat("Saved: output/figures/cutoff_category_barplot.png\n")
 
 # Separate plots for each outcome
 p_crs_bar <- ggplot(crs_by_category, aes(x = Exposure_Category, y = CRS_rate, fill = Exposure_Category)) +
@@ -507,11 +507,11 @@ p_vgpr_bar <- ggplot(vgpr_by_category, aes(x = Exposure_Category, y = VGPR_rate,
   theme_bw(base_size = 12) +
   theme(plot.title = element_text(face = "bold"), legend.position = "none")
 
-ggsave("../output/figures/cutoff_CRS_barplot.png", p_crs_bar, width = 8, height = 6, dpi = 200)
-ggsave("../output/figures/cutoff_VGPR_barplot.png", p_vgpr_bar, width = 8, height = 6, dpi = 200)
+ggsave("output/figures/cutoff_CRS_barplot.png", p_crs_bar, width = 8, height = 6, dpi = 200)
+ggsave("output/figures/cutoff_VGPR_barplot.png", p_vgpr_bar, width = 8, height = 6, dpi = 200)
 
-cat("Saved: ../output/figures/cutoff_CRS_barplot.png\n")
-cat("Saved: ../output/figures/cutoff_VGPR_barplot.png\n")
+cat("Saved: output/figures/cutoff_CRS_barplot.png\n")
+cat("Saved: output/figures/cutoff_VGPR_barplot.png\n")
 
 #-------------------------------------------------------------------------------
 # 10. Combined Cut-off Plot with Optimal Range Shading
@@ -540,8 +540,8 @@ p_combined_shaded <- ggplot(plot_data_long, aes(x = Cutoff, y = Rate, color = Ou
     legend.position = "bottom"
   )
 
-ggsave("../output/figures/cutoff_therapeutic_window.png", p_combined_shaded, width = 12, height = 8, dpi = 200)
-cat("Saved: ../output/figures/cutoff_therapeutic_window.png\n")
+ggsave("output/figures/cutoff_therapeutic_window.png", p_combined_shaded, width = 12, height = 8, dpi = 200)
+cat("Saved: output/figures/cutoff_therapeutic_window.png\n")
 
 #-------------------------------------------------------------------------------
 # 11. Print Final Summary

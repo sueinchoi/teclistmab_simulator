@@ -25,10 +25,10 @@ cat("==========================================================\n\n")
 
 cat("Loading data...\n")
 
-pk_ae_data <- read_csv("../output/tables/pk_ae_merged_results.csv", show_col_types = FALSE)
-response_data <- read_csv("../data/response_data.csv", show_col_types = FALSE)
+pk_ae_data <- read_csv("output/tables/pk_ae_merged_results.csv", show_col_types = FALSE)
+response_data <- read_csv("data/response_data.csv", show_col_types = FALSE)
 
-dosing_all <- read_csv("../output/tables/mrgsolve_dosing_full.csv", show_col_types = FALSE) %>%
+dosing_all <- read_csv("output/tables/mrgsolve_dosing_full.csv", show_col_types = FALSE) %>%
   filter(TIME >= 0) %>%
   arrange(ID, TIME)
 
@@ -328,13 +328,13 @@ roc_combined <- grid.arrange(
   ncol = 3, nrow = 1
 )
 
-ggsave("../output/figures/roc_curves_combined.png", roc_combined, width = 14, height = 5, dpi = 300)
-cat("Saved: ../output/figures/roc_curves_combined.png\n")
+ggsave("output/figures/roc_curves_combined.png", roc_combined, width = 14, height = 5, dpi = 300)
+cat("Saved: output/figures/roc_curves_combined.png\n")
 
 # Save individual plots
-ggsave("../output/figures/roc_response.png", p_roc_response, width = 5, height = 5, dpi = 300)
-ggsave("../output/figures/roc_crs_any.png", p_roc_crs, width = 5, height = 5, dpi = 300)
-ggsave("../output/figures/roc_crs_gr2.png", p_roc_crs_gr2, width = 5, height = 5, dpi = 300)
+ggsave("output/figures/roc_response.png", p_roc_response, width = 5, height = 5, dpi = 300)
+ggsave("output/figures/roc_crs_any.png", p_roc_crs, width = 5, height = 5, dpi = 300)
+ggsave("output/figures/roc_crs_gr2.png", p_roc_crs_gr2, width = 5, height = 5, dpi = 300)
 
 #-------------------------------------------------------------------------------
 # 8. Save Cut-off Comparison Tables
@@ -355,16 +355,16 @@ crs_gr2_metrics_out <- crs_gr2_metrics %>%
 # Combined table
 all_metrics <- bind_rows(response_metrics_out, crs_metrics_out, crs_gr2_metrics_out)
 
-write_csv(all_metrics, "../output/tables/cutoff_metrics_all.csv")
-cat("Saved: ../output/tables/cutoff_metrics_all.csv\n")
+write_csv(all_metrics, "output/tables/cutoff_metrics_all.csv")
+cat("Saved: output/tables/cutoff_metrics_all.csv\n")
 
 # Individual tables
-write_csv(response_metrics, "../output/tables/cutoff_metrics_response.csv")
-write_csv(crs_metrics, "../output/tables/cutoff_metrics_crs_any.csv")
-write_csv(crs_gr2_metrics, "../output/tables/cutoff_metrics_crs_gr2.csv")
-cat("Saved: ../output/tables/cutoff_metrics_response.csv\n")
-cat("Saved: ../output/tables/cutoff_metrics_crs_any.csv\n")
-cat("Saved: ../output/tables/cutoff_metrics_crs_gr2.csv\n")
+write_csv(response_metrics, "output/tables/cutoff_metrics_response.csv")
+write_csv(crs_metrics, "output/tables/cutoff_metrics_crs_any.csv")
+write_csv(crs_gr2_metrics, "output/tables/cutoff_metrics_crs_gr2.csv")
+cat("Saved: output/tables/cutoff_metrics_response.csv\n")
+cat("Saved: output/tables/cutoff_metrics_crs_any.csv\n")
+cat("Saved: output/tables/cutoff_metrics_crs_gr2.csv\n")
 
 #-------------------------------------------------------------------------------
 # 9. Summary Table (Optimal Cut-offs)
@@ -396,8 +396,8 @@ optimal_summary <- bind_rows(
 cat("\n")
 print(optimal_summary, width = Inf)
 
-write_csv(optimal_summary, "../output/tables/optimal_cutoff_summary.csv")
-cat("\nSaved: ../output/tables/optimal_cutoff_summary.csv\n")
+write_csv(optimal_summary, "output/tables/optimal_cutoff_summary.csv")
+cat("\nSaved: output/tables/optimal_cutoff_summary.csv\n")
 
 #-------------------------------------------------------------------------------
 # 10. Print Final Summary

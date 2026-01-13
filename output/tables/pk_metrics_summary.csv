@@ -1,0 +1,9 @@
+Dosing Period,Metric,Unit,Median (IQR)
+Step-up dose 1st (0.06 mg/kg),Cmax,mg/L,"0.137 (0.122, 0.178)"
+Step-up dose 1st (0.06 mg/kg),Cavg,mg/L,"0.088 (0.069, 0.109)"
+Step-up dose 2nd (0.3 mg/kg),Cmax,mg/L,"5.345 (4.858, 6.915)"
+Step-up dose 2nd (0.3 mg/kg),Cavg,mg/L,"4.330 (3.807, 5.362)"
+First 3 days (Day 0-3),Cmax,mg/L,"0.194 (0.151, 0.482)"
+First 3 days (Day 0-3),Cavg,mg/L,"0.114 (0.089, 0.148)"
+Day 0-5 (First 120 hours),Cmax,mg/L,"0.775 (0.641, 1.023)"
+Day 0-5 (First 120 hours),Cavg,mg/L,"0.295 (0.208, 0.408)"
