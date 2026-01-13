@@ -226,18 +226,20 @@ cat("\n=== Creating ROC Curves ===\n")
 # Function to create ROC plot
 create_roc_plot <- function(roc_obj, auc_val, ci_vals, optimal_coords, title, color) {
 
-  # Extract ROC data
+  # Extract ROC data and sort properly for step plot
   roc_df <- data.frame(
     specificity = roc_obj$specificities,
     sensitivity = roc_obj$sensitivities
-  )
+  ) %>%
+    arrange(specificity) %>%
+    mutate(fpr = 1 - specificity)
 
   # AUC label
   auc_label <- sprintf("AUC = %.3f (%.3f-%.3f)", auc_val, ci_vals[1], ci_vals[3])
   optimal_label <- sprintf("Optimal: %.3f", optimal_coords$threshold)
 
-  ggplot(roc_df, aes(x = 1 - specificity, y = sensitivity)) +
-    geom_line(color = color, size = 1.2) +
+  ggplot(roc_df, aes(x = fpr, y = sensitivity)) +
+    geom_step(color = color, size = 1.2, direction = "vh") +
     geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "gray50") +
     geom_point(
       data = data.frame(
