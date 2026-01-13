@@ -6,6 +6,11 @@
 # 2. 2-month PFS status - Odds Ratio (Logistic Regression)
 # 3. PFS - Hazard Ratio (Cox Regression)
 #
+# Additional analyses:
+# - Boxplots with Wilcoxon p-values
+# - Categorical analysis (median split) with OR/HR
+# - Predictive performance evaluation
+#
 # NOTE: Uses PK metrics from ae_pk_analysis.R (pk_ae_merged_results.csv)
 #       Run ae_pk_analysis.R first to generate the PK data
 #===============================================================================
@@ -14,6 +19,7 @@ library(tidyverse)
 library(survival)
 library(broom)
 library(gridExtra)
+library(pROC)
 
 set.seed(12345)
 
@@ -279,7 +285,241 @@ if (nrow(pfs_results) > 0) {
 }
 
 #-------------------------------------------------------------------------------
-# 8. Combine and Save Results
+# 8. Boxplots with Wilcoxon p-values for Response Outcomes
+#-------------------------------------------------------------------------------
+
+cat("\n\n=== Boxplots with Wilcoxon p-values ===\n")
+
+# Function to create boxplot with p-value (like ae_pk_analysis.R)
+create_response_boxplot_pval <- function(data, outcome_var, outcome_label, pk_var) {
+  plot_data <- data %>%
+    filter(!is.na(.data[[outcome_var]]) & !is.na(.data[[pk_var]])) %>%
+    mutate(Response = factor(ifelse(.data[[outcome_var]] == 1, "Yes", "No"),
+                              levels = c("No", "Yes")))
+
+  if (nrow(plot_data) < 4) return(list(plot = NULL, stats = NULL))
+
+  yes_vals <- plot_data %>% filter(Response == "Yes") %>% pull(.data[[pk_var]])
+  no_vals <- plot_data %>% filter(Response == "No") %>% pull(.data[[pk_var]])
+
+  if (length(yes_vals) < 1 || length(no_vals) < 1) return(list(plot = NULL, stats = NULL))
+
+  # Wilcoxon test
+  p_val <- tryCatch({
+    wilcox.test(yes_vals, no_vals)$p.value
+  }, error = function(e) NA)
+
+  # Median (IQR)
+  median_iqr <- function(x) {
+    sprintf("%.4f (%.4f-%.4f)", median(x), quantile(x, 0.25), quantile(x, 0.75))
+  }
+
+  p_label <- if (!is.na(p_val)) {
+    if (p_val < 0.001) "p < 0.001"
+    else if (p_val < 0.01) sprintf("p = %.3f", p_val)
+    else sprintf("p = %.2f", p_val)
+  } else "p = NA"
+
+  y_max <- max(plot_data[[pk_var]], na.rm = TRUE)
+
+  p <- ggplot(plot_data, aes(x = Response, y = .data[[pk_var]], fill = Response)) +
+    geom_boxplot(alpha = 0.7, outlier.shape = 21) +
+    geom_jitter(width = 0.15, alpha = 0.6, size = 2.5) +
+    scale_fill_manual(values = c("No" = "#e74c3c", "Yes" = "#27ae60")) +
+    labs(title = pk_var, x = outcome_label, y = pk_var) +
+    annotate("text", x = 1.5, y = y_max * 1.15, label = p_label, size = 3.5, fontface = "bold") +
+    theme_bw(base_size = 11) +
+    theme(legend.position = "none",
+          plot.title = element_text(size = 10, face = "bold"))
+
+  stats <- tibble(
+    Outcome = outcome_label,
+    `PK Metric` = pk_var,
+    `Yes (N)` = length(yes_vals),
+    `No (N)` = length(no_vals),
+    `Yes Median (IQR)` = median_iqr(yes_vals),
+    `No Median (IQR)` = median_iqr(no_vals),
+    `Wilcoxon p-value` = p_val,
+    Sig = ifelse(!is.na(p_val) && p_val < 0.05, "*", "")
+  )
+
+  list(plot = p, stats = stats)
+}
+
+# Create boxplots for VGPR
+cat("\n--- VGPR or Better Boxplots ---\n")
+vgpr_boxplot_results <- map(pk_metrics, function(pk_var) {
+  create_response_boxplot_pval(filtered_data, "VGPR_or_better", "≥VGPR", pk_var)
+})
+
+vgpr_boxplot_stats <- map_dfr(vgpr_boxplot_results, ~ .x$stats)
+vgpr_plots <- compact(map(vgpr_boxplot_results, ~ .x$plot))
+
+if (nrow(vgpr_boxplot_stats) > 0) {
+  print(vgpr_boxplot_stats, n = 100)
+}
+
+if (length(vgpr_plots) > 0) {
+  combined <- arrangeGrob(grobs = vgpr_plots, ncol = 4, nrow = 2,
+                          top = "PK Metrics by VGPR Response (with Wilcoxon p-values)")
+  ggsave("boxplot_VGPR_wilcoxon.png", combined, width = 16, height = 8, dpi = 200)
+  cat("Saved: boxplot_VGPR_wilcoxon.png\n")
+}
+
+# Create boxplots for 2-month PFS
+cat("\n--- 2-Month PFS Boxplots ---\n")
+pfs2m_boxplot_results <- map(pk_metrics, function(pk_var) {
+  create_response_boxplot_pval(filtered_data, "PFS_2month", "2-month PFS", pk_var)
+})
+
+pfs2m_boxplot_stats <- map_dfr(pfs2m_boxplot_results, ~ .x$stats)
+pfs2m_plots <- compact(map(pfs2m_boxplot_results, ~ .x$plot))
+
+if (nrow(pfs2m_boxplot_stats) > 0) {
+  print(pfs2m_boxplot_stats, n = 100)
+}
+
+if (length(pfs2m_plots) > 0) {
+  combined <- arrangeGrob(grobs = pfs2m_plots, ncol = 4, nrow = 2,
+                          top = "PK Metrics by 2-Month PFS Status (with Wilcoxon p-values)")
+  ggsave("boxplot_2monthPFS_wilcoxon.png", combined, width = 16, height = 8, dpi = 200)
+  cat("Saved: boxplot_2monthPFS_wilcoxon.png\n")
+}
+
+#-------------------------------------------------------------------------------
+# 9. Categorical Analysis (Median Split) - OR/HR
+#-------------------------------------------------------------------------------
+
+cat("\n\n=== Categorical Analysis (Median Split) ===\n")
+
+# Create median-split categories for each PK metric
+filtered_data_cat <- filtered_data
+for (pk_var in pk_metrics) {
+  med_val <- median(filtered_data[[pk_var]], na.rm = TRUE)
+  cat_var <- paste0(pk_var, "_cat")
+  filtered_data_cat[[cat_var]] <- ifelse(filtered_data[[pk_var]] >= med_val, "High", "Low")
+  filtered_data_cat[[cat_var]] <- factor(filtered_data_cat[[cat_var]], levels = c("Low", "High"))
+}
+
+# Logistic regression for categorical variables
+run_categorical_logistic <- function(data, outcome_var, pk_var, outcome_name) {
+  cat_var <- paste0(pk_var, "_cat")
+
+  model_data <- data %>%
+    filter(!is.na(.data[[outcome_var]]) & !is.na(.data[[cat_var]]))
+
+  if (nrow(model_data) < 5) return(NULL)
+  if (length(unique(model_data[[outcome_var]])) < 2) return(NULL)
+  if (length(unique(model_data[[cat_var]])) < 2) return(NULL)
+
+  med_val <- median(filtered_data[[pk_var]], na.rm = TRUE)
+
+  tryCatch({
+    fit <- glm(as.formula(paste(outcome_var, "~", cat_var)),
+               data = model_data, family = binomial)
+
+    coef_summary <- summary(fit)$coefficients
+
+    beta <- coef_summary[2, "Estimate"]
+    se <- coef_summary[2, "Std. Error"]
+    p_value <- coef_summary[2, "Pr(>|z|)"]
+
+    or <- exp(beta)
+    or_lower <- exp(beta - 1.96 * se)
+    or_upper <- exp(beta + 1.96 * se)
+
+    # Count by group
+    high_yes <- sum(model_data[[cat_var]] == "High" & model_data[[outcome_var]] == 1)
+    high_n <- sum(model_data[[cat_var]] == "High")
+    low_yes <- sum(model_data[[cat_var]] == "Low" & model_data[[outcome_var]] == 1)
+    low_n <- sum(model_data[[cat_var]] == "Low")
+
+    tibble(
+      Outcome = outcome_name,
+      `PK Metric` = pk_var,
+      `Median Cutoff` = round(med_val, 4),
+      `High (events/N)` = sprintf("%d/%d", high_yes, high_n),
+      `Low (events/N)` = sprintf("%d/%d", low_yes, low_n),
+      `OR (95% CI)` = sprintf("%.2f (%.2f-%.2f)", or, or_lower, or_upper),
+      OR = or,
+      `p-value` = p_value,
+      Sig = ifelse(p_value < 0.05, "*", "")
+    )
+  }, error = function(e) NULL)
+}
+
+# Cox regression for categorical variables
+run_categorical_cox <- function(data, pk_var) {
+  cat_var <- paste0(pk_var, "_cat")
+
+  model_data <- data %>%
+    filter(!is.na(PFS_event) & !is.na(PFS_time) & !is.na(.data[[cat_var]])) %>%
+    filter(PFS_time > 0)
+
+  if (nrow(model_data) < 5) return(NULL)
+  if (sum(model_data$PFS_event) < 2) return(NULL)
+  if (length(unique(model_data[[cat_var]])) < 2) return(NULL)
+
+  med_val <- median(filtered_data[[pk_var]], na.rm = TRUE)
+
+  tryCatch({
+    fit <- coxph(as.formula(paste("Surv(PFS_time, PFS_event) ~", cat_var)), data = model_data)
+    fit_summary <- summary(fit)
+
+    hr <- fit_summary$conf.int[1, "exp(coef)"]
+    hr_lower <- fit_summary$conf.int[1, "lower .95"]
+    hr_upper <- fit_summary$conf.int[1, "upper .95"]
+    p_value <- fit_summary$coefficients[1, "Pr(>|z|)"]
+
+    # Count by group
+    high_events <- sum(model_data[[cat_var]] == "High" & model_data$PFS_event == 1)
+    high_n <- sum(model_data[[cat_var]] == "High")
+    low_events <- sum(model_data[[cat_var]] == "Low" & model_data$PFS_event == 1)
+    low_n <- sum(model_data[[cat_var]] == "Low")
+
+    tibble(
+      Outcome = "PFS",
+      `PK Metric` = pk_var,
+      `Median Cutoff` = round(med_val, 4),
+      `High (events/N)` = sprintf("%d/%d", high_events, high_n),
+      `Low (events/N)` = sprintf("%d/%d", low_events, low_n),
+      `HR (95% CI)` = sprintf("%.2f (%.2f-%.2f)", hr, hr_lower, hr_upper),
+      HR = hr,
+      `p-value` = p_value,
+      Sig = ifelse(p_value < 0.05, "*", "")
+    )
+  }, error = function(e) NULL)
+}
+
+# Run categorical analysis for VGPR
+cat("\n--- VGPR (Categorical - Median Split) ---\n")
+vgpr_cat_results <- map_dfr(pk_metrics, function(pk_var) {
+  run_categorical_logistic(filtered_data_cat, "VGPR_or_better", pk_var, "≥VGPR")
+})
+if (nrow(vgpr_cat_results) > 0) {
+  print(vgpr_cat_results %>% select(-OR), n = 100)
+}
+
+# Run categorical analysis for 2-month PFS
+cat("\n--- 2-Month PFS (Categorical - Median Split) ---\n")
+pfs2m_cat_results <- map_dfr(pk_metrics, function(pk_var) {
+  run_categorical_logistic(filtered_data_cat, "PFS_2month", pk_var, "2-month PFS")
+})
+if (nrow(pfs2m_cat_results) > 0) {
+  print(pfs2m_cat_results %>% select(-OR), n = 100)
+}
+
+# Run categorical analysis for PFS (Cox)
+cat("\n--- PFS (Categorical - Median Split, Cox HR) ---\n")
+pfs_cat_results <- map_dfr(pk_metrics, function(pk_var) {
+  run_categorical_cox(filtered_data_cat, pk_var)
+})
+if (nrow(pfs_cat_results) > 0) {
+  print(pfs_cat_results %>% select(-HR), n = 100)
+}
+
+#-------------------------------------------------------------------------------
+# 10. Combine and Save Results
 #-------------------------------------------------------------------------------
 
 # Combine all results
@@ -295,7 +535,7 @@ write_csv(all_results, "pk_response_statistical_results.csv")
 cat("\n\nSaved all results to: pk_response_statistical_results.csv\n")
 
 #-------------------------------------------------------------------------------
-# 9. Create Forest Plots
+# 11. Create Forest Plots
 #-------------------------------------------------------------------------------
 
 cat("\n=== Creating Forest Plots ===\n")
@@ -363,52 +603,128 @@ if (nrow(pfs_results) > 0) {
 }
 
 #-------------------------------------------------------------------------------
-# 10. Summary Boxplots by Response
+# 12. Predictive Performance Evaluation
 #-------------------------------------------------------------------------------
 
-cat("\nCreating boxplots by response...\n")
+cat("\n\n=== Predictive Performance Evaluation ===\n")
 
-# Boxplot for VGPR
-create_response_boxplot <- function(data, response_var, response_label, pk_var) {
-  plot_data <- data %>%
-    filter(!is.na(.data[[response_var]]) & !is.na(.data[[pk_var]])) %>%
-    mutate(Response = factor(ifelse(.data[[response_var]] == 1, "Yes", "No"),
-                              levels = c("No", "Yes")))
+# Collect all p-values from different analyses
+all_pvals <- bind_rows(
+  # Continuous logistic regression
+  vgpr_results %>% select(`PK Metric`, `p-value`) %>% mutate(Analysis = "VGPR_continuous"),
+  pfs2m_results %>% select(`PK Metric`, `p-value`) %>% mutate(Analysis = "PFS2m_continuous"),
+  # Wilcoxon tests
+  vgpr_boxplot_stats %>% select(`PK Metric`, `p-value` = `Wilcoxon p-value`) %>% mutate(Analysis = "VGPR_wilcoxon"),
+  pfs2m_boxplot_stats %>% select(`PK Metric`, `p-value` = `Wilcoxon p-value`) %>% mutate(Analysis = "PFS2m_wilcoxon"),
+  # Categorical
+  vgpr_cat_results %>% select(`PK Metric`, `p-value`) %>% mutate(Analysis = "VGPR_categorical"),
+  pfs2m_cat_results %>% select(`PK Metric`, `p-value`) %>% mutate(Analysis = "PFS2m_categorical")
+)
 
-  if (nrow(plot_data) < 4) return(NULL)
+# Find most significant metrics (lowest average p-value or most frequent significance)
+sig_summary <- all_pvals %>%
+  group_by(`PK Metric`) %>%
+  summarise(
+    Mean_pvalue = mean(`p-value`, na.rm = TRUE),
+    Min_pvalue = min(`p-value`, na.rm = TRUE),
+    N_significant = sum(`p-value` < 0.05, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(Min_pvalue)
 
-  ggplot(plot_data, aes(x = Response, y = .data[[pk_var]], fill = Response)) +
-    geom_boxplot(alpha = 0.7) +
-    geom_jitter(width = 0.15, alpha = 0.6, size = 2.5) +
-    scale_fill_manual(values = c("No" = "#e74c3c", "Yes" = "#27ae60")) +
-    labs(title = response_label, x = "", y = pk_var) +
-    theme_bw(base_size = 11) +
-    theme(legend.position = "none",
-          plot.title = element_text(size = 10, face = "bold"))
-}
+cat("\n--- PK Metric Significance Ranking ---\n")
+print(sig_summary, n = 10)
 
-# Key metrics
-key_metrics <- c("Cavg_72hr", "Cavg_120hr", "Cmax_72hr", "Cmax_120hr")
+# Select top 2 most significant metrics
+top_metrics <- sig_summary %>% head(2) %>% pull(`PK Metric`)
+cat("\n>>> Top 2 Most Significant PK Metrics:", paste(top_metrics, collapse = ", "), "<<<\n")
 
-# VGPR boxplots
-vgpr_plots <- list()
-for (pk_var in key_metrics) {
-  p <- create_response_boxplot(filtered_data, "VGPR_or_better", "≥VGPR", pk_var)
-  if (!is.null(p)) {
-    p <- p + labs(title = pk_var, x = "≥VGPR")
-    vgpr_plots[[pk_var]] <- p
+# ROC Analysis for top metrics
+cat("\n--- ROC Analysis for Top Metrics ---\n")
+
+roc_results <- list()
+
+for (pk_var in top_metrics) {
+  cat(sprintf("\n%s:\n", pk_var))
+
+  # ROC for VGPR
+  vgpr_data <- filtered_data %>%
+    filter(!is.na(VGPR_or_better) & !is.na(.data[[pk_var]]))
+
+  if (nrow(vgpr_data) >= 5 && length(unique(vgpr_data$VGPR_or_better)) == 2) {
+    roc_vgpr <- tryCatch({
+      roc(vgpr_data$VGPR_or_better, vgpr_data[[pk_var]], quiet = TRUE)
+    }, error = function(e) NULL)
+
+    if (!is.null(roc_vgpr)) {
+      auc_vgpr <- auc(roc_vgpr)
+      ci_vgpr <- ci.auc(roc_vgpr)
+
+      # Find optimal cutoff (Youden)
+      coords_vgpr <- coords(roc_vgpr, "best", ret = c("threshold", "sensitivity", "specificity"))
+
+      cat(sprintf("  VGPR: AUC = %.3f (%.3f-%.3f)\n", auc_vgpr, ci_vgpr[1], ci_vgpr[3]))
+      cat(sprintf("         Optimal cutoff = %.4f (Sens=%.2f, Spec=%.2f)\n",
+                  coords_vgpr$threshold, coords_vgpr$sensitivity, coords_vgpr$specificity))
+
+      roc_results[[paste0(pk_var, "_VGPR")]] <- list(
+        metric = pk_var, outcome = "VGPR",
+        auc = as.numeric(auc_vgpr), auc_lower = ci_vgpr[1], auc_upper = ci_vgpr[3],
+        cutoff = coords_vgpr$threshold,
+        sensitivity = coords_vgpr$sensitivity,
+        specificity = coords_vgpr$specificity
+      )
+    }
+  }
+
+  # ROC for 2-month PFS
+  pfs2m_data <- filtered_data %>%
+    filter(!is.na(PFS_2month) & !is.na(.data[[pk_var]]))
+
+  if (nrow(pfs2m_data) >= 5 && length(unique(pfs2m_data$PFS_2month)) == 2) {
+    roc_pfs2m <- tryCatch({
+      roc(pfs2m_data$PFS_2month, pfs2m_data[[pk_var]], quiet = TRUE)
+    }, error = function(e) NULL)
+
+    if (!is.null(roc_pfs2m)) {
+      auc_pfs2m <- auc(roc_pfs2m)
+      ci_pfs2m <- ci.auc(roc_pfs2m)
+      coords_pfs2m <- coords(roc_pfs2m, "best", ret = c("threshold", "sensitivity", "specificity"))
+
+      cat(sprintf("  2-mo PFS: AUC = %.3f (%.3f-%.3f)\n", auc_pfs2m, ci_pfs2m[1], ci_pfs2m[3]))
+      cat(sprintf("            Optimal cutoff = %.4f (Sens=%.2f, Spec=%.2f)\n",
+                  coords_pfs2m$threshold, coords_pfs2m$sensitivity, coords_pfs2m$specificity))
+
+      roc_results[[paste0(pk_var, "_PFS2m")]] <- list(
+        metric = pk_var, outcome = "2-month PFS",
+        auc = as.numeric(auc_pfs2m), auc_lower = ci_pfs2m[1], auc_upper = ci_pfs2m[3],
+        cutoff = coords_pfs2m$threshold,
+        sensitivity = coords_pfs2m$sensitivity,
+        specificity = coords_pfs2m$specificity
+      )
+    }
   }
 }
 
-if (length(vgpr_plots) > 0) {
-  combined <- arrangeGrob(grobs = vgpr_plots, ncol = 2, nrow = 2,
-                           top = "PK Metrics by VGPR Response")
-  ggsave("boxplot_VGPR_response.png", combined, width = 10, height = 10, dpi = 200)
-  cat("Saved: boxplot_VGPR_response.png\n")
+# Summary table
+if (length(roc_results) > 0) {
+  roc_summary <- map_dfr(roc_results, ~ tibble(
+    `PK Metric` = .x$metric,
+    Outcome = .x$outcome,
+    `AUC (95% CI)` = sprintf("%.3f (%.3f-%.3f)", .x$auc, .x$auc_lower, .x$auc_upper),
+    `Optimal Cutoff` = round(.x$cutoff, 4),
+    Sensitivity = round(.x$sensitivity, 2),
+    Specificity = round(.x$specificity, 2)
+  ))
+
+  cat("\n--- Predictive Performance Summary ---\n")
+  print(roc_summary, n = 100)
+  write_csv(roc_summary, "pk_response_roc_results.csv")
+  cat("\nSaved: pk_response_roc_results.csv\n")
 }
 
 #-------------------------------------------------------------------------------
-# 11. Final Summary
+# 13. Final Summary
 #-------------------------------------------------------------------------------
 
 cat("\n")
@@ -444,11 +760,13 @@ cat("\n==========================================================\n")
 cat("                    OUTPUT FILES\n")
 cat("==========================================================\n")
 cat("  - pk_response_analysis_data.csv (filtered analysis data)\n")
-cat("  - pk_response_statistical_results.csv (all statistical results)\n")
+cat("  - pk_response_statistical_results.csv (continuous OR/HR results)\n")
+cat("  - pk_response_roc_results.csv (ROC/AUC predictive performance)\n")
+cat("  - boxplot_VGPR_wilcoxon.png (VGPR boxplots with p-values)\n")
+cat("  - boxplot_2monthPFS_wilcoxon.png (2-month PFS boxplots with p-values)\n")
 cat("  - forest_VGPR_OR.png (VGPR forest plot)\n")
 cat("  - forest_2monthPFS_OR.png (2-month PFS forest plot)\n")
 cat("  - forest_PFS_HR.png (PFS hazard ratio forest plot)\n")
-cat("  - boxplot_VGPR_response.png (VGPR boxplots)\n")
 cat("==========================================================\n")
 cat("                 Analysis Complete!\n")
 cat("==========================================================\n")

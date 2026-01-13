@@ -384,6 +384,272 @@ write_csv(stat_results, "ae_pk_statistical_results.csv")
 cat("Saved statistical results to: ae_pk_statistical_results.csv\n")
 
 #-------------------------------------------------------------------------------
+# 10b. Logistic Regression (OR) for CRS and Neurotoxicity
+#-------------------------------------------------------------------------------
+
+cat("\n=== Logistic Regression (OR) for CRS and Neurotoxicity ===\n")
+
+run_ae_logistic <- function(data, ae_var, ae_label, pk_var) {
+  model_data <- data %>%
+    filter(!is.na(.data[[ae_var]]) & !is.na(.data[[pk_var]]))
+
+  if (nrow(model_data) < 5) return(NULL)
+  if (length(unique(model_data[[ae_var]])) < 2) return(NULL)
+
+  # Standardize PK variable
+  model_data$pk_std <- scale(model_data[[pk_var]])[,1]
+
+  tryCatch({
+    fit <- glm(as.formula(paste(ae_var, "~ pk_std")),
+               data = model_data, family = binomial)
+
+    coef_summary <- summary(fit)$coefficients
+
+    beta <- coef_summary["pk_std", "Estimate"]
+    se <- coef_summary["pk_std", "Std. Error"]
+    p_value <- coef_summary["pk_std", "Pr(>|z|)"]
+
+    or <- exp(beta)
+    or_lower <- exp(beta - 1.96 * se)
+    or_upper <- exp(beta + 1.96 * se)
+
+    tibble(
+      `Adverse Event` = ae_label,
+      `PK Metric` = pk_var,
+      N = nrow(model_data),
+      `AE+` = sum(model_data[[ae_var]] == 1),
+      `OR (95% CI)` = sprintf("%.2f (%.2f-%.2f)", or, or_lower, or_upper),
+      OR = or,
+      `p-value` = p_value,
+      Sig = ifelse(p_value < 0.05, "*", "")
+    )
+  }, error = function(e) NULL)
+}
+
+# Run OR analysis for CRS and Neurotoxicity
+ae_or_vars <- list(
+  "CRS (all grade)" = "CRS_any",
+  "CRS (Grade 2+)" = "CRS_gr2",
+  "Neurotoxicity (all grade)" = "Neuro_any",
+  "Neurotoxicity (Grade 2+)" = "Neuro_gr2"
+)
+
+or_results <- map_dfr(names(ae_or_vars), function(ae_label) {
+  ae_var <- ae_or_vars[[ae_label]]
+  map_dfr(pk_metrics, function(pk_var) {
+    run_ae_logistic(analysis_data, ae_var, ae_label, pk_var)
+  })
+})
+
+if (nrow(or_results) > 0) {
+  cat("\n--- Logistic Regression OR Results ---\n")
+  print(or_results %>% select(-OR), n = 100)
+
+  write_csv(or_results, "ae_pk_or_results.csv")
+  cat("\nSaved: ae_pk_or_results.csv\n")
+}
+
+#-------------------------------------------------------------------------------
+# 10c. Categorical Analysis (Median Split) for CRS and Neurotoxicity
+#-------------------------------------------------------------------------------
+
+cat("\n=== Categorical Analysis (Median Split) ===\n")
+
+# Create median-split categories
+analysis_data_cat <- analysis_data
+for (pk_var in pk_metrics) {
+  med_val <- median(analysis_data[[pk_var]], na.rm = TRUE)
+  cat_var <- paste0(pk_var, "_cat")
+  analysis_data_cat[[cat_var]] <- ifelse(analysis_data[[pk_var]] >= med_val, "High", "Low")
+  analysis_data_cat[[cat_var]] <- factor(analysis_data_cat[[cat_var]], levels = c("Low", "High"))
+}
+
+run_ae_categorical_logistic <- function(data, ae_var, ae_label, pk_var, orig_data) {
+  cat_var <- paste0(pk_var, "_cat")
+
+  model_data <- data %>%
+    filter(!is.na(.data[[ae_var]]) & !is.na(.data[[cat_var]]))
+
+  if (nrow(model_data) < 5) return(NULL)
+  if (length(unique(model_data[[ae_var]])) < 2) return(NULL)
+  if (length(unique(model_data[[cat_var]])) < 2) return(NULL)
+
+  med_val <- median(orig_data[[pk_var]], na.rm = TRUE)
+
+  tryCatch({
+    fit <- glm(as.formula(paste(ae_var, "~", cat_var)),
+               data = model_data, family = binomial)
+
+    coef_summary <- summary(fit)$coefficients
+
+    beta <- coef_summary[2, "Estimate"]
+    se <- coef_summary[2, "Std. Error"]
+    p_value <- coef_summary[2, "Pr(>|z|)"]
+
+    or <- exp(beta)
+    or_lower <- exp(beta - 1.96 * se)
+    or_upper <- exp(beta + 1.96 * se)
+
+    # Count by group
+    high_ae <- sum(model_data[[cat_var]] == "High" & model_data[[ae_var]] == 1)
+    high_n <- sum(model_data[[cat_var]] == "High")
+    low_ae <- sum(model_data[[cat_var]] == "Low" & model_data[[ae_var]] == 1)
+    low_n <- sum(model_data[[cat_var]] == "Low")
+
+    tibble(
+      `Adverse Event` = ae_label,
+      `PK Metric` = pk_var,
+      `Median Cutoff` = round(med_val, 4),
+      `High (AE+/N)` = sprintf("%d/%d", high_ae, high_n),
+      `Low (AE+/N)` = sprintf("%d/%d", low_ae, low_n),
+      `OR (95% CI)` = sprintf("%.2f (%.2f-%.2f)", or, or_lower, or_upper),
+      OR = or,
+      `p-value` = p_value,
+      Sig = ifelse(p_value < 0.05, "*", "")
+    )
+  }, error = function(e) NULL)
+}
+
+cat_or_results <- map_dfr(names(ae_or_vars), function(ae_label) {
+  ae_var <- ae_or_vars[[ae_label]]
+  map_dfr(pk_metrics, function(pk_var) {
+    run_ae_categorical_logistic(analysis_data_cat, ae_var, ae_label, pk_var, analysis_data)
+  })
+})
+
+if (nrow(cat_or_results) > 0) {
+  cat("\n--- Categorical OR Results (Median Split) ---\n")
+  print(cat_or_results %>% select(-OR), n = 100)
+
+  write_csv(cat_or_results, "ae_pk_categorical_or_results.csv")
+  cat("\nSaved: ae_pk_categorical_or_results.csv\n")
+}
+
+#-------------------------------------------------------------------------------
+# 10d. Predictive Performance for CRS and Neurotoxicity
+#-------------------------------------------------------------------------------
+
+cat("\n=== Predictive Performance for AE ===\n")
+
+library(pROC)
+
+# Collect all p-values
+ae_all_pvals <- bind_rows(
+  stat_results %>%
+    filter(`Adverse Event` %in% c("CRS (all grade)", "Neurotoxicity (all grade)")) %>%
+    select(`PK Metric`, `p-value`) %>%
+    mutate(Analysis = "Wilcoxon"),
+  or_results %>%
+    filter(`Adverse Event` %in% c("CRS (all grade)", "Neurotoxicity (all grade)")) %>%
+    select(`PK Metric`, `p-value`) %>%
+    mutate(Analysis = "OR_continuous"),
+  cat_or_results %>%
+    filter(`Adverse Event` %in% c("CRS (all grade)", "Neurotoxicity (all grade)")) %>%
+    select(`PK Metric`, `p-value`) %>%
+    mutate(Analysis = "OR_categorical")
+)
+
+# Rank metrics
+ae_sig_summary <- ae_all_pvals %>%
+  group_by(`PK Metric`) %>%
+  summarise(
+    Mean_pvalue = mean(`p-value`, na.rm = TRUE),
+    Min_pvalue = min(`p-value`, na.rm = TRUE),
+    N_significant = sum(`p-value` < 0.05, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(Min_pvalue)
+
+cat("\n--- AE PK Metric Significance Ranking ---\n")
+print(ae_sig_summary, n = 10)
+
+# Top 2 metrics
+ae_top_metrics <- ae_sig_summary %>% head(2) %>% pull(`PK Metric`)
+cat("\n>>> Top 2 Most Significant PK Metrics for AE:", paste(ae_top_metrics, collapse = ", "), "<<<\n")
+
+# ROC Analysis
+cat("\n--- ROC Analysis for AE ---\n")
+
+ae_roc_results <- list()
+
+for (pk_var in ae_top_metrics) {
+  cat(sprintf("\n%s:\n", pk_var))
+
+  # ROC for CRS
+  crs_data <- analysis_data %>%
+    filter(!is.na(CRS_any) & !is.na(.data[[pk_var]]))
+
+  if (nrow(crs_data) >= 5 && length(unique(crs_data$CRS_any)) == 2) {
+    roc_crs <- tryCatch({
+      roc(crs_data$CRS_any, crs_data[[pk_var]], quiet = TRUE)
+    }, error = function(e) NULL)
+
+    if (!is.null(roc_crs)) {
+      auc_crs <- auc(roc_crs)
+      ci_crs <- ci.auc(roc_crs)
+      coords_crs <- coords(roc_crs, "best", ret = c("threshold", "sensitivity", "specificity"))
+
+      cat(sprintf("  CRS: AUC = %.3f (%.3f-%.3f)\n", auc_crs, ci_crs[1], ci_crs[3]))
+      cat(sprintf("       Optimal cutoff = %.4f (Sens=%.2f, Spec=%.2f)\n",
+                  coords_crs$threshold, coords_crs$sensitivity, coords_crs$specificity))
+
+      ae_roc_results[[paste0(pk_var, "_CRS")]] <- list(
+        metric = pk_var, outcome = "CRS",
+        auc = as.numeric(auc_crs), auc_lower = ci_crs[1], auc_upper = ci_crs[3],
+        cutoff = coords_crs$threshold,
+        sensitivity = coords_crs$sensitivity,
+        specificity = coords_crs$specificity
+      )
+    }
+  }
+
+  # ROC for Neurotoxicity
+  neuro_data <- analysis_data %>%
+    filter(!is.na(Neuro_any) & !is.na(.data[[pk_var]]))
+
+  if (nrow(neuro_data) >= 5 && length(unique(neuro_data$Neuro_any)) == 2) {
+    roc_neuro <- tryCatch({
+      roc(neuro_data$Neuro_any, neuro_data[[pk_var]], quiet = TRUE)
+    }, error = function(e) NULL)
+
+    if (!is.null(roc_neuro)) {
+      auc_neuro <- auc(roc_neuro)
+      ci_neuro <- ci.auc(roc_neuro)
+      coords_neuro <- coords(roc_neuro, "best", ret = c("threshold", "sensitivity", "specificity"))
+
+      cat(sprintf("  Neurotoxicity: AUC = %.3f (%.3f-%.3f)\n", auc_neuro, ci_neuro[1], ci_neuro[3]))
+      cat(sprintf("                 Optimal cutoff = %.4f (Sens=%.2f, Spec=%.2f)\n",
+                  coords_neuro$threshold, coords_neuro$sensitivity, coords_neuro$specificity))
+
+      ae_roc_results[[paste0(pk_var, "_Neuro")]] <- list(
+        metric = pk_var, outcome = "Neurotoxicity",
+        auc = as.numeric(auc_neuro), auc_lower = ci_neuro[1], auc_upper = ci_neuro[3],
+        cutoff = coords_neuro$threshold,
+        sensitivity = coords_neuro$sensitivity,
+        specificity = coords_neuro$specificity
+      )
+    }
+  }
+}
+
+# Summary table
+if (length(ae_roc_results) > 0) {
+  ae_roc_summary <- map_dfr(ae_roc_results, ~ tibble(
+    `PK Metric` = .x$metric,
+    `Adverse Event` = .x$outcome,
+    `AUC (95% CI)` = sprintf("%.3f (%.3f-%.3f)", .x$auc, .x$auc_lower, .x$auc_upper),
+    `Optimal Cutoff` = round(.x$cutoff, 4),
+    Sensitivity = round(.x$sensitivity, 2),
+    Specificity = round(.x$specificity, 2)
+  ))
+
+  cat("\n--- AE Predictive Performance Summary ---\n")
+  print(ae_roc_summary, n = 100)
+  write_csv(ae_roc_summary, "ae_pk_roc_results.csv")
+  cat("\nSaved: ae_pk_roc_results.csv\n")
+}
+
+#-------------------------------------------------------------------------------
 # 11. Create Boxplots
 #-------------------------------------------------------------------------------
 
@@ -505,7 +771,10 @@ cat("\n==========================================================\n")
 cat("                    OUTPUT FILES\n")
 cat("==========================================================\n")
 cat("  - pk_ae_merged_results.csv (merged PK and AE data)\n")
-cat("  - ae_pk_statistical_results.csv (statistical results)\n")
+cat("  - ae_pk_statistical_results.csv (Wilcoxon test results)\n")
+cat("  - ae_pk_or_results.csv (logistic regression OR results)\n")
+cat("  - ae_pk_categorical_or_results.csv (median-split categorical OR)\n")
+cat("  - ae_pk_roc_results.csv (ROC/AUC predictive performance)\n")
 cat("  - boxplot_*_by_AE.png (boxplots for each PK metric)\n")
 cat("  - boxplot_CRS_summary.png (CRS summary)\n")
 cat("==========================================================\n")
