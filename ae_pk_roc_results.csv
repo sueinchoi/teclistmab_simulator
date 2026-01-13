@@ -1,0 +1,5 @@
+PK Metric,Adverse Event,AUC (95% CI),Optimal Cutoff,Sensitivity,Specificity
+Cmax_120hr,CRS,0.800 (0.622-0.978),0.9179,0.67,0.93
+Cmax_120hr,Neurotoxicity,0.575 (0.262-0.888),0.8046,0.8,0.54
+Cavg_120hr,CRS,0.781 (0.598-0.964),0.3042,0.73,0.86
+Cavg_120hr,Neurotoxicity,0.583 (0.263-0.904),0.2944,0.8,0.58
