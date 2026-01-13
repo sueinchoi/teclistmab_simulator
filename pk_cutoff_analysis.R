@@ -203,96 +203,177 @@ cat("Saved: cutoff_CRS_rate.png\n")
 cat("Saved: cutoff_combined_rates.png\n")
 
 #-------------------------------------------------------------------------------
-# 6. Find Optimal Cut-offs Using ROC Analysis
+# 6. Find Optimal Range Using Benefit-Risk Analysis
 #-------------------------------------------------------------------------------
 
-cat("\n=== Finding Optimal Cut-offs (ROC) ===\n")
+cat("\n=== Finding Optimal Range (Benefit-Risk Analysis) ===\n")
 
 library(pROC)
 
-# ROC for VGPR (maximize sensitivity for response)
-vgpr_data <- analysis_data %>%
-  filter(Has_6doses == TRUE & !is.na(VGPR_or_better) & !is.na(Cavg_120hr))
+# Strategy: Find range where VGPR is maximized and CRS is acceptable
+# 1. Upper bound: Where CRS rate stays below safety threshold
+# 2. Lower bound: Where VGPR rate is acceptable
+# 3. Net Clinical Benefit: VGPR_rate - CRS_rate
 
-if (nrow(vgpr_data) >= 5 && length(unique(vgpr_data$VGPR_or_better)) == 2) {
-  roc_vgpr <- roc(vgpr_data$VGPR_or_better, vgpr_data$Cavg_120hr, quiet = TRUE)
-  coords_vgpr <- coords(roc_vgpr, "best", ret = c("threshold", "sensitivity", "specificity"))
-  auc_vgpr <- auc(roc_vgpr)
+# Define thresholds
+CRS_THRESHOLD <- 90   # Maximum acceptable CRS rate (%)
+VGPR_MIN_THRESHOLD <- 50  # Minimum acceptable VGPR rate (%)
 
-  cat("\n--- VGPR+ Optimal Cut-off (ROC) ---\n")
-  cat(sprintf("  AUC: %.3f\n", auc_vgpr))
-  cat(sprintf("  Optimal Threshold: %.4f\n", coords_vgpr$threshold))
-  cat(sprintf("  Sensitivity: %.2f\n", coords_vgpr$sensitivity))
-  cat(sprintf("  Specificity: %.2f\n", coords_vgpr$specificity))
+#--- Method 1: Constraint-based approach ---
+cat("\n--- Method 1: Constraint-Based Approach ---\n")
 
-  vgpr_cutoff <- coords_vgpr$threshold
+# Calculate event rates at each Cavg_120hr value (within-bin analysis)
+# Create finer bins for more precise analysis
+n_bins <- 20
+cavg_sorted <- sort(analysis_data$Cavg_120hr)
+bin_breaks <- quantile(cavg_sorted, probs = seq(0, 1, length.out = n_bins + 1), na.rm = TRUE)
+bin_breaks <- unique(bin_breaks)  # Remove duplicates
+
+# Calculate event rates for each bin
+bin_analysis <- map_dfr(1:(length(bin_breaks) - 1), function(i) {
+  lower <- bin_breaks[i]
+  upper <- bin_breaks[i + 1]
+
+  # All patients in this bin (for CRS)
+  bin_all <- analysis_data %>%
+    filter(Cavg_120hr >= lower & Cavg_120hr < upper)
+
+  # Patients with ≥6 doses in this bin (for VGPR)
+  bin_vgpr <- analysis_data %>%
+    filter(Has_6doses == TRUE & Cavg_120hr >= lower & Cavg_120hr < upper)
+
+  tibble(
+    Bin = i,
+    Lower = lower,
+    Upper = upper,
+    Midpoint = (lower + upper) / 2,
+    N_all = nrow(bin_all),
+    N_vgpr = nrow(bin_vgpr),
+    CRS_rate = ifelse(nrow(bin_all) > 0, mean(bin_all$CRS_any, na.rm = TRUE) * 100, NA),
+    VGPR_rate = ifelse(nrow(bin_vgpr) > 0, mean(bin_vgpr$VGPR_or_better, na.rm = TRUE) * 100, NA)
+  )
+})
+
+cat("\n--- Event Rates by Cavg_120hr Bin ---\n")
+print(bin_analysis %>% select(Bin, Lower, Upper, N_all, CRS_rate, N_vgpr, VGPR_rate), n = 25)
+
+# Find upper bound: highest Cavg_120hr where CRS < threshold
+upper_candidates <- bin_analysis %>%
+  filter(!is.na(CRS_rate) & CRS_rate < CRS_THRESHOLD) %>%
+  arrange(desc(Upper))
+
+if (nrow(upper_candidates) > 0) {
+  optimal_upper <- upper_candidates$Upper[1]
+  cat(sprintf("\nUpper bound (CRS < %d%%): %.4f mg/L\n", CRS_THRESHOLD, optimal_upper))
 } else {
-  vgpr_cutoff <- median(vgpr_data$Cavg_120hr, na.rm = TRUE)
-  cat("\nUsing median for VGPR cutoff:", round(vgpr_cutoff, 4), "\n")
+  # If all bins have CRS >= threshold, use median
+  optimal_upper <- median(cavg_values, na.rm = TRUE)
+  cat(sprintf("\nNo bin with CRS < %d%%, using median: %.4f mg/L\n", CRS_THRESHOLD, optimal_upper))
 }
 
-# ROC for CRS (minimize false negatives for safety)
-crs_data <- analysis_data %>%
-  filter(!is.na(CRS_any) & !is.na(Cavg_120hr))
-
-if (nrow(crs_data) >= 5 && length(unique(crs_data$CRS_any)) == 2) {
-  roc_crs <- roc(crs_data$CRS_any, crs_data$Cavg_120hr, quiet = TRUE)
-  coords_crs <- coords(roc_crs, "best", ret = c("threshold", "sensitivity", "specificity"))
-  auc_crs <- auc(roc_crs)
-
-  cat("\n--- CRS Optimal Cut-off (ROC) ---\n")
-  cat(sprintf("  AUC: %.3f\n", auc_crs))
-  cat(sprintf("  Optimal Threshold: %.4f\n", coords_crs$threshold))
-  cat(sprintf("  Sensitivity: %.2f\n", coords_crs$sensitivity))
-  cat(sprintf("  Specificity: %.2f\n", coords_crs$specificity))
-
-  crs_cutoff <- coords_crs$threshold
-} else {
-  crs_cutoff <- median(crs_data$Cavg_120hr, na.rm = TRUE)
-  cat("\nUsing median for CRS cutoff:", round(crs_cutoff, 4), "\n")
-}
-
-#-------------------------------------------------------------------------------
-# 7. Define Optimal Range (Low / Optimal / High)
-#-------------------------------------------------------------------------------
-
-cat("\n=== Defining Optimal Therapeutic Range ===\n")
-
-# Strategy: Optimal range is where VGPR is high but CRS is not excessively high
-# Lower bound: cutoff where VGPR rate starts to be acceptable (e.g., >50%)
-# Upper bound: cutoff where CRS rate becomes concerning
-
-# Find lower bound (VGPR rate > 60% threshold)
-vgpr_threshold <- 60
+# Find lower bound: lowest Cavg_120hr where VGPR is still acceptable
+# Use cumulative approach: VGPR rate for patients >= cutoff
 lower_candidates <- event_rate_results %>%
-  filter(VGPR_rate_above >= vgpr_threshold) %>%
+  filter(VGPR_rate_above >= VGPR_MIN_THRESHOLD & Cutoff <= optimal_upper) %>%
   arrange(Cutoff)
 
 if (nrow(lower_candidates) > 0) {
-  lower_bound <- max(lower_candidates$Cutoff)  # highest cutoff that still gives good VGPR
+  optimal_lower <- lower_candidates$Cutoff[1]
+  cat(sprintf("Lower bound (VGPR >= %d%% above): %.4f mg/L\n", VGPR_MIN_THRESHOLD, optimal_lower))
 } else {
-  lower_bound <- quantile(cavg_values, 0.25, na.rm = TRUE)
+  optimal_lower <- quantile(cavg_values, 0.25, na.rm = TRUE)
+  cat(sprintf("No cutoff with VGPR >= %d%%, using Q1: %.4f mg/L\n", VGPR_MIN_THRESHOLD, optimal_lower))
 }
 
-# Find upper bound based on CRS rate increase
-# Use 90th percentile or where CRS significantly increases
-upper_bound <- quantile(cavg_values, 0.85, na.rm = TRUE)
+#--- Method 2: Net Clinical Benefit ---
+cat("\n--- Method 2: Net Clinical Benefit Score ---\n")
 
-# Alternatively, use ROC-based cutoffs
-# Lower bound = cutoff for efficacy, Upper bound = cutoff for safety
-optimal_lower <- min(vgpr_cutoff, lower_bound)
-optimal_upper <- max(crs_cutoff, upper_bound)
+# Calculate Net Benefit = VGPR_rate - CRS_rate for patients within range [lower, upper]
+# Test different ranges
+range_analysis <- expand_grid(
+  Lower = quantile(cavg_values, seq(0.1, 0.5, by = 0.1), na.rm = TRUE),
+  Upper = quantile(cavg_values, seq(0.5, 0.9, by = 0.1), na.rm = TRUE)
+) %>%
+  filter(Lower < Upper) %>%
+  rowwise() %>%
+  mutate(
+    # Patients within range
+    N_range_all = sum(analysis_data$Cavg_120hr >= Lower & analysis_data$Cavg_120hr <= Upper, na.rm = TRUE),
+    N_range_vgpr = sum(analysis_data$Cavg_120hr >= Lower & analysis_data$Cavg_120hr <= Upper &
+                        analysis_data$Has_6doses == TRUE, na.rm = TRUE),
 
-# Ensure reasonable range
+    # Event rates within range
+    CRS_in_range = {
+      pts <- analysis_data %>% filter(Cavg_120hr >= Lower & Cavg_120hr <= Upper)
+      if (nrow(pts) > 0) mean(pts$CRS_any, na.rm = TRUE) * 100 else NA_real_
+    },
+    VGPR_in_range = {
+      pts <- analysis_data %>% filter(Cavg_120hr >= Lower & Cavg_120hr <= Upper & Has_6doses == TRUE)
+      if (nrow(pts) > 0) mean(pts$VGPR_or_better, na.rm = TRUE) * 100 else NA_real_
+    },
+
+    # Net Clinical Benefit (higher is better)
+    Net_Benefit = VGPR_in_range - CRS_in_range,
+
+    # Benefit-Risk Ratio (higher is better, avoid division by zero)
+    Benefit_Risk_Ratio = VGPR_in_range / (CRS_in_range + 1)
+  ) %>%
+  ungroup() %>%
+  filter(!is.na(Net_Benefit) & N_range_all >= 3)
+
+# Find best range by Net Benefit (with constraint that CRS < threshold)
+best_range <- range_analysis %>%
+  filter(CRS_in_range < CRS_THRESHOLD) %>%
+  arrange(desc(Net_Benefit)) %>%
+  head(1)
+
+if (nrow(best_range) > 0) {
+  cat(sprintf("\nBest Range by Net Benefit (CRS < %d%%):\n", CRS_THRESHOLD))
+  cat(sprintf("  Range: %.4f - %.4f mg/L\n", best_range$Lower, best_range$Upper))
+  cat(sprintf("  N in range: %d (all), %d (≥6 doses)\n", best_range$N_range_all, best_range$N_range_vgpr))
+  cat(sprintf("  VGPR rate: %.1f%%\n", best_range$VGPR_in_range))
+  cat(sprintf("  CRS rate: %.1f%%\n", best_range$CRS_in_range))
+  cat(sprintf("  Net Benefit: %.1f\n", best_range$Net_Benefit))
+
+  # Use Method 2 result if it gives better range
+  if (best_range$Net_Benefit > (optimal_lower - optimal_upper)) {
+    optimal_lower_m2 <- best_range$Lower
+    optimal_upper_m2 <- best_range$Upper
+  }
+}
+
+#--- Final Optimal Range Selection ---
+cat("\n--- Final Optimal Range ---\n")
+
+# Ensure upper bound respects CRS constraint
+# Check CRS rate at the proposed upper bound
+crs_at_upper <- bin_analysis %>%
+  filter(Upper <= optimal_upper) %>%
+  summarise(max_crs = max(CRS_rate, na.rm = TRUE))
+
+if (!is.na(crs_at_upper$max_crs) && crs_at_upper$max_crs >= 100) {
+  # Find the last bin before CRS reaches 100%
+  safe_bins <- bin_analysis %>%
+    filter(CRS_rate < 100) %>%
+    arrange(desc(Upper))
+
+  if (nrow(safe_bins) > 0) {
+    optimal_upper <- safe_bins$Upper[1]
+    cat(sprintf("Adjusted upper bound (before CRS=100%%): %.4f mg/L\n", optimal_upper))
+  }
+}
+
+# Validate bounds
 if (optimal_lower >= optimal_upper) {
+  cat("Warning: Lower bound >= Upper bound, adjusting...\n")
   optimal_lower <- quantile(cavg_values, 0.33, na.rm = TRUE)
   optimal_upper <- quantile(cavg_values, 0.67, na.rm = TRUE)
 }
 
-cat(sprintf("\nOptimal Range: %.4f - %.4f mg/L\n", optimal_lower, optimal_upper))
+cat(sprintf("\n>>> OPTIMAL RANGE: %.4f - %.4f mg/L <<<\n", optimal_lower, optimal_upper))
 
 #-------------------------------------------------------------------------------
-# 8. Categorize Patients: Low / Optimal / High
+# 7. Categorize Patients: Low / Optimal / High
 #-------------------------------------------------------------------------------
 
 cat("\n=== Categorizing Patients ===\n")
@@ -311,7 +392,7 @@ cat("\nExposure Category Distribution:\n")
 print(table(analysis_data$Exposure_Category))
 
 #-------------------------------------------------------------------------------
-# 9. Calculate Event Rates by Category
+# 8. Calculate Event Rates by Category
 #-------------------------------------------------------------------------------
 
 cat("\n=== Event Rates by Exposure Category ===\n")
@@ -357,7 +438,7 @@ write_csv(summary_by_category, "pk_cutoff_category_summary.csv")
 cat("\nSaved: pk_cutoff_category_summary.csv\n")
 
 #-------------------------------------------------------------------------------
-# 10. Create Bar Plot for Event Rates by Category
+# 9. Create Bar Plot for Event Rates by Category
 #-------------------------------------------------------------------------------
 
 cat("\n=== Creating Category Bar Plots ===\n")
@@ -433,7 +514,7 @@ cat("Saved: cutoff_CRS_barplot.png\n")
 cat("Saved: cutoff_VGPR_barplot.png\n")
 
 #-------------------------------------------------------------------------------
-# 11. Combined Cut-off Plot with Optimal Range Shading
+# 10. Combined Cut-off Plot with Optimal Range Shading
 #-------------------------------------------------------------------------------
 
 p_combined_shaded <- ggplot(plot_data_long, aes(x = Cutoff, y = Rate, color = Outcome)) +
@@ -463,7 +544,7 @@ ggsave("cutoff_therapeutic_window.png", p_combined_shaded, width = 12, height = 
 cat("Saved: cutoff_therapeutic_window.png\n")
 
 #-------------------------------------------------------------------------------
-# 12. Print Final Summary
+# 11. Print Final Summary
 #-------------------------------------------------------------------------------
 
 cat("\n")
