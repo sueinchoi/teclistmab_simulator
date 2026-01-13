@@ -500,6 +500,8 @@ if (nrow(vgpr_cat_results) > 0) {
   print(vgpr_cat_results %>% select(-OR), n = 100)
 }
 
+view(vgpr_cat_results)
+
 # Run categorical analysis for 2-month PFS
 cat("\n--- 2-Month PFS (Categorical - Median Split) ---\n")
 pfs2m_cat_results <- map_dfr(pk_metrics, function(pk_var) {
