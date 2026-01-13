@@ -1,5 +1,6 @@
 PK Metric,Outcome,AUC (95% CI),Optimal Cutoff,Sensitivity,Specificity
-Cavg_72hr,VGPR,0.881 (0.632-1.000),0.0778,1,0.67
-Cavg_72hr,2-month PFS,0.800 (0.388-1.000),0.1068,0.6,1
-Cmax_72hr,VGPR,0.881 (0.632-1.000),0.1242,1,0.67
-Cmax_72hr,2-month PFS,0.767 (0.402-1.000),0.1827,0.6,1
+Cavg_120hr,VGPR,0.839 (0.637-1.000),0.296,0.64,1
+Cavg_120hr,2-month PFS,0.733 (0.491-0.975),0.296,0.6,1
+Cmax_72hr,VGPR,0.786 (0.507-1.000),0.1242,1,0.5
+Cmax_72hr,VGPR,0.786 (0.507-1.000),0.1959,0.5,1
+Cmax_72hr,2-month PFS,0.667 (0.340-0.993),0.1959,0.47,1
