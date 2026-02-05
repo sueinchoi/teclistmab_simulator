@@ -837,12 +837,16 @@ server <- function(input, output, session) {
 
   # Run AI optimization
   ai_result <- eventReactive(input$run_ai, {
-    req(input$ai_request)
+    # Validate input - use shiny::validate instead of req
+    ai_request_text <- input$ai_request
+    if (is.null(ai_request_text) || nchar(trimws(ai_request_text)) == 0) {
+      return(NULL)
+    }
 
     withProgress(message = 'AI Optimizer running...', value = 0, {
 
       # Parse request
-      goals <- parse_ai_request(input$ai_request)
+      goals <- parse_ai_request(ai_request_text)
       incProgress(0.1, detail = "Analyzing request...")
 
       # Current base parameters
@@ -906,7 +910,7 @@ server <- function(input, output, session) {
       list(
         goals = goals,
         results = results,
-        request = input$ai_request
+        request = ai_request_text
       )
     })
   })
@@ -914,10 +918,12 @@ server <- function(input, output, session) {
   # AI Recommendation UI
   output$ai_recommendation_ui <- renderUI({
     result <- ai_result()
-    if (is.null(result)) return(NULL)
+    if (is.null(result) || length(result$results) == 0) return(NULL)
 
     # Find best scenario
     scores <- sapply(result$results, function(x) x$score)
+    if (length(scores) == 0) return(NULL)
+
     best_name <- names(which.max(scores))
     best_result <- result$results[[best_name]]
 
@@ -943,7 +949,7 @@ server <- function(input, output, session) {
   # Scenario comparison table
   output$ai_scenario_table <- renderDT({
     result <- ai_result()
-    if (is.null(result)) return(NULL)
+    if (is.null(result) || length(result$results) == 0) return(NULL)
 
     # Build comparison table
     comparison <- map_dfr(names(result$results), function(name) {
@@ -990,7 +996,7 @@ server <- function(input, output, session) {
   # Comparison plot
   output$ai_comparison_plot <- renderPlot({
     result <- ai_result()
-    if (is.null(result)) return(NULL)
+    if (is.null(result) || length(result$results) == 0) return(NULL)
 
     plot_data <- map_dfr(names(result$results), function(name) {
       r <- result$results[[name]]
