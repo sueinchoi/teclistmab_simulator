@@ -33,12 +33,12 @@ cat("==========================================================\n\n")
 cat("Loading pre-computed PK simulation results...\n")
 
 # Check if pre-computed results exist
-if (!file.exists("pk_ae_merged_results.csv")) {
+if (!file.exists("output/tables/pk_ae_merged_results.csv")) {
   stop("ERROR: pk_ae_merged_results.csv not found!\n",
        "Please run pk_simulation.R first to generate PK simulation results.")
 }
 
-analysis_data <- read_csv("pk_ae_merged_results.csv", show_col_types = FALSE)
+analysis_data <- read_csv("output/tables/pk_ae_merged_results.csv", show_col_types = FALSE)
 cat("  - Loaded", nrow(analysis_data), "patients from pk_ae_merged_results.csv\n")
 
 #-------------------------------------------------------------------------------
@@ -81,7 +81,7 @@ analyze_ae_pk <- function(data, ae_var, ae_label, pk_var) {
 
   median_iqr <- function(x) {
     if (length(x) == 0) return("N/A")
-    sprintf("%.4f (%.4f-%.4f)", median(x), quantile(x, 0.25), quantile(x, 0.75))
+    sprintf("%.3f (%.3f, %.3f)", median(x), quantile(x, 0.25), quantile(x, 0.75))
   }
 
   test_result <- tryCatch({
@@ -99,7 +99,7 @@ analyze_ae_pk <- function(data, ae_var, ae_label, pk_var) {
     `AE- (N)` = length(ae_no),
     `AE+ Median (IQR)` = median_iqr(ae_yes),
     `AE- Median (IQR)` = median_iqr(ae_no),
-    `p-value` = test_result$p.value,
+    `p-value` = ifelse(!is.na(test_result$p.value), sprintf("%.3f", test_result$p.value), "N/A"),
     `Sig` = ifelse(!is.na(test_result$p.value) && test_result$p.value < 0.05, "*", "")
   )
 }
@@ -120,8 +120,57 @@ stat_results <- map_dfr(names(ae_vars), function(ae_label) {
 # Filter out NA results
 stat_results <- stat_results %>% filter(!is.na(`p-value`) | `AE+ (N)` > 0)
 
-write_csv(stat_results, "ae_pk_statistical_results.csv")
-cat("Saved statistical results to: ae_pk_statistical_results.csv\n")
+write_csv(stat_results, "output/tables/ae_pk_statistical_results.csv")
+cat("Saved statistical results to: output/tables/ae_pk_statistical_results.csv\n")
+
+#-------------------------------------------------------------------------------
+# 4B. PK Metrics Summary Table
+#-------------------------------------------------------------------------------
+
+cat("\n=== Creating PK Metrics Summary Table ===\n")
+
+# Define dosing periods and corresponding metrics
+pk_summary <- tibble(
+  `Dosing Period` = c(
+    "Step-up dose 1st (0.06 mg/kg)", "Step-up dose 1st (0.06 mg/kg)",
+    "Step-up dose 2nd (0.3 mg/kg)", "Step-up dose 2nd (0.3 mg/kg)",
+    "First 3 days (Day 0-3)", "First 3 days (Day 0-3)",
+    "Day 0-5 (First 120 hours)", "Day 0-5 (First 120 hours)"
+  ),
+  Metric = c(
+    "Cmax", "Cavg",
+    "Cmax", "Cavg",
+    "Cmax", "Cavg",
+    "Cmax", "Cavg"
+  ),
+  Unit = c(
+    "mg/L", "mg/L",
+    "mg/L", "mg/L",
+    "mg/L", "mg/L",
+    "mg/L", "mg/L"
+  ),
+  PK_var = c(
+    "Cmax_dose1", "Cavg_dose1",
+    "Cmax_dose3", "Cavg_dose3",
+    "Cmax_72hr", "Cavg_72hr",
+    "Cmax_120hr", "Cavg_120hr"
+  )
+)
+
+# Calculate Median (IQR) for each metric
+pk_summary <- pk_summary %>%
+  rowwise() %>%
+  mutate(
+    values = list(analysis_data[[PK_var]][!is.na(analysis_data[[PK_var]])]),
+    `Median (IQR)` = sprintf("%.3f (%.3f, %.3f)",
+                             median(unlist(values)),
+                             quantile(unlist(values), 0.25),
+                             quantile(unlist(values), 0.75))
+  ) %>%
+  select(`Dosing Period`, Metric, Unit, `Median (IQR)`)
+
+write_csv(pk_summary, "output/tables/pk_metrics_summary.csv")
+cat("Saved PK metrics summary to: output/tables/pk_metrics_summary.csv\n")
 
 #-------------------------------------------------------------------------------
 # 5. Logistic Regression (OR) for CRS and Neurotoxicity
@@ -158,9 +207,9 @@ run_ae_logistic <- function(data, ae_var, ae_label, pk_var) {
       `PK Metric` = pk_var,
       N = nrow(model_data),
       `AE+` = sum(model_data[[ae_var]] == 1),
-      `OR (95% CI)` = sprintf("%.2f (%.2f-%.2f)", or, or_lower, or_upper),
-      OR = or,
-      `p-value` = p_value,
+      `OR (95% CI)` = sprintf("%.2f (%.2f, %.2f)", or, or_lower, or_upper),
+      OR = sprintf("%.2f", or),
+      `p-value` = sprintf("%.3f", p_value),
       Sig = ifelse(p_value < 0.05, "*", "")
     )
   }, error = function(e) NULL)
@@ -185,8 +234,8 @@ if (nrow(or_results) > 0) {
   cat("\n--- Logistic Regression OR Results ---\n")
   print(or_results %>% select(-OR), n = 100)
 
-  write_csv(or_results, "ae_pk_or_results.csv")
-  cat("\nSaved: ae_pk_or_results.csv\n")
+  write_csv(or_results, "output/tables/ae_pk_or_results.csv")
+  cat("\nSaved: output/tables/ae_pk_or_results.csv\n")
 }
 
 #-------------------------------------------------------------------------------
@@ -239,12 +288,12 @@ run_ae_categorical_logistic <- function(data, ae_var, ae_label, pk_var, orig_dat
     tibble(
       `Adverse Event` = ae_label,
       `PK Metric` = pk_var,
-      `Median Cutoff` = round(med_val, 4),
+      `Median Cutoff` = sprintf("%.3f", med_val),
       `High (AE+/N)` = sprintf("%d/%d", high_ae, high_n),
       `Low (AE+/N)` = sprintf("%d/%d", low_ae, low_n),
-      `OR (95% CI)` = sprintf("%.2f (%.2f-%.2f)", or, or_lower, or_upper),
-      OR = or,
-      `p-value` = p_value,
+      `OR (95% CI)` = sprintf("%.2f (%.2f, %.2f)", or, or_lower, or_upper),
+      OR = sprintf("%.2f", or),
+      `p-value` = sprintf("%.3f", p_value),
       Sig = ifelse(p_value < 0.05, "*", "")
     )
   }, error = function(e) NULL)
@@ -261,8 +310,8 @@ if (nrow(cat_or_results) > 0) {
   cat("\n--- Categorical OR Results (Median Split) ---\n")
   print(cat_or_results %>% select(-OR), n = 100)
 
-  write_csv(cat_or_results, "ae_pk_categorical_or_results.csv")
-  cat("\nSaved: ae_pk_categorical_or_results.csv\n")
+  write_csv(cat_or_results, "output/tables/ae_pk_categorical_or_results.csv")
+  cat("\nSaved: output/tables/ae_pk_categorical_or_results.csv\n")
 }
 
 #-------------------------------------------------------------------------------
@@ -385,8 +434,8 @@ if (length(ae_roc_results) > 0) {
 
   cat("\n--- AE Predictive Performance Summary ---\n")
   print(ae_roc_summary, n = 100)
-  write_csv(ae_roc_summary, "ae_pk_roc_results.csv")
-  cat("\nSaved: ae_pk_roc_results.csv\n")
+  write_csv(ae_roc_summary, "output/tables/ae_pk_roc_results.csv")
+  cat("\nSaved: output/tables/ae_pk_roc_results.csv\n")
 }
 
 #-------------------------------------------------------------------------------
@@ -446,7 +495,7 @@ for (pk_var in pk_metrics) {
 
     combined_plot <- arrangeGrob(grobs = plots, ncol = ncol, nrow = nrow,
                                   top = paste0(pk_var, " by Adverse Event Status"))
-    ggsave(sprintf("boxplot_%s_by_AE.png", pk_var), combined_plot,
+    ggsave(sprintf("output/figures/boxplot_%s_by_AE.png", pk_var), combined_plot,
            width = 16, height = 4 * nrow, dpi = 200)
   }
 }
@@ -471,7 +520,7 @@ for (pk_var in key_pk_metrics) {
 if (length(crs_plots) > 0) {
   crs_combined <- arrangeGrob(grobs = crs_plots, ncol = 2, nrow = 2,
                                top = "PK Metrics by CRS Status (All Grade)")
-  ggsave("boxplot_CRS_summary.png", crs_combined, width = 10, height = 10, dpi = 200)
+  ggsave("output/figures/boxplot_CRS_summary.png", crs_combined, width = 10, height = 10, dpi = 200)
 }
 
 #-------------------------------------------------------------------------------

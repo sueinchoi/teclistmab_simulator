@@ -26,15 +26,15 @@ cat("==========================================================\n\n")
 cat("Loading data...\n")
 
 # Load PK + AE merged data
-pk_ae_data <- read_csv("pk_ae_merged_results.csv", show_col_types = FALSE)
+pk_ae_data <- read_csv("output/tables/pk_ae_merged_results.csv", show_col_types = FALSE)
 cat("  - Loaded PK+AE data for", nrow(pk_ae_data), "patients\n")
 
 # Load response data
-response_data <- read_csv("response_data.csv", show_col_types = FALSE)
+response_data <- read_csv("data/response_data.csv", show_col_types = FALSE)
 cat("  - Loaded response data\n")
 
 # Load dosing data
-dosing_all <- read_csv("mrgsolve_dosing_full.csv", show_col_types = FALSE) %>%
+dosing_all <- read_csv("output/tables/mrgsolve_dosing_full.csv", show_col_types = FALSE) %>%
   filter(TIME >= 0) %>%
   arrange(ID, TIME)
 
@@ -268,9 +268,12 @@ panel_B <- ggarrange(p_vgpr, p_pfs, ncol = 2, nrow = 1, widths = c(1, 1))
 
 #-------------------------------------------------------------------------------
 # 5. Panel C: Therapeutic Window (Event Rate vs Cut-off)
+#    Using ROC-based optimal cut-offs
 #-------------------------------------------------------------------------------
 
 cat("\n=== Creating Panel C ===\n")
+
+library(pROC)
 
 # Define cut-off range
 cavg_values <- analysis_data$Cavg_120hr
@@ -298,54 +301,66 @@ event_rate_results <- map_dfr(cutoffs, function(cutoff) {
   )
 })
 
-# Find optimal range (CRS < 90%, maximize VGPR)
-CRS_THRESHOLD <- 90
-VGPR_MIN_THRESHOLD <- 50
+#--- ROC-based optimal cut-offs (matching pk_roc_analysis.R) ---
+cat("\n--- Finding ROC-based optimal cut-offs ---\n")
 
-# Bin analysis for upper bound
-n_bins <- 20
-bin_breaks <- quantile(cavg_values, probs = seq(0, 1, length.out = n_bins + 1), na.rm = TRUE)
-bin_breaks <- unique(bin_breaks)
+# 1. Response (≥VGPR): Use Youden's Index (≥6 doses only) - LOWER BOUND
+response_data_roc <- analysis_data %>%
+  filter(Has_6doses & !is.na(VGPR_or_better) & !is.na(Cavg_120hr))
 
-bin_analysis <- map_dfr(1:(length(bin_breaks) - 1), function(i) {
-  lower <- bin_breaks[i]
-  upper <- bin_breaks[i + 1]
-  bin_all <- analysis_data %>% filter(Cavg_120hr >= lower & Cavg_120hr < upper)
-  tibble(
-    Lower = lower,
-    Upper = upper,
-    CRS_rate = ifelse(nrow(bin_all) > 0, mean(bin_all$CRS_any, na.rm = TRUE) * 100, NA)
-  )
+roc_response <- roc(response_data_roc$VGPR_or_better,
+                    response_data_roc$Cavg_120hr, quiet = TRUE)
+coords_response <- coords(roc_response, "best", ret = c("threshold", "sensitivity", "specificity"),
+                          best.method = "youden")
+
+optimal_lower <- coords_response$threshold
+cat(sprintf("Response cut-off (Youden): %.4f\n", optimal_lower))
+
+# 2. CRS (Grade 2+): Use Accuracy (all patients) - UPPER BOUND
+crs_gr2_data_roc <- analysis_data %>%
+  filter(!is.na(CRS_gr2) & !is.na(Cavg_120hr))
+
+# Calculate metrics at different cut-offs to find best Accuracy for CRS Gr2+
+cutoffs_crs_gr2 <- seq(0.15, 0.55, by = 0.05)
+crs_gr2_metrics <- map_dfr(cutoffs_crs_gr2, function(cutoff) {
+  pred_pos <- crs_gr2_data_roc$Cavg_120hr >= cutoff
+  actual_pos <- crs_gr2_data_roc$CRS_gr2 == 1
+
+  TP <- sum(pred_pos & actual_pos, na.rm = TRUE)
+  TN <- sum(!pred_pos & !actual_pos, na.rm = TRUE)
+  FP <- sum(pred_pos & !actual_pos, na.rm = TRUE)
+  FN <- sum(!pred_pos & actual_pos, na.rm = TRUE)
+
+  accuracy <- ifelse((TP + TN + FP + FN) > 0, (TP + TN) / (TP + TN + FP + FN), NA)
+
+  tibble(Cutoff = cutoff, Accuracy = accuracy)
 })
 
-# Find optimal bounds
-upper_candidates <- bin_analysis %>%
-  filter(!is.na(CRS_rate) & CRS_rate < CRS_THRESHOLD) %>%
-  arrange(desc(Upper))
+optimal_crs_gr2 <- crs_gr2_metrics %>%
+  filter(!is.na(Accuracy)) %>%
+  arrange(desc(Accuracy)) %>%
+  head(1)
 
-optimal_upper <- if (nrow(upper_candidates) > 0) upper_candidates$Upper[1] else median(cavg_values, na.rm = TRUE)
-
-lower_candidates <- event_rate_results %>%
-  filter(VGPR_rate >= VGPR_MIN_THRESHOLD & Cutoff <= optimal_upper) %>%
-  arrange(Cutoff)
-
-optimal_lower <- if (nrow(lower_candidates) > 0) lower_candidates$Cutoff[1] else quantile(cavg_values, 0.25, na.rm = TRUE)
+optimal_upper <- optimal_crs_gr2$Cutoff
+cat(sprintf("CRS Grade 2+ cut-off (Accuracy): %.4f\n", optimal_upper))
 
 # Ensure valid range
 if (optimal_lower >= optimal_upper) {
-  optimal_lower <- quantile(cavg_values, 0.33, na.rm = TRUE)
-  optimal_upper <- quantile(cavg_values, 0.67, na.rm = TRUE)
+  cat("Warning: Lower >= Upper, swapping...\n")
+  temp <- optimal_lower
+  optimal_lower <- optimal_upper
+  optimal_upper <- temp
 }
 
-cat(sprintf("Optimal Range: %.4f - %.4f\n", optimal_lower, optimal_upper))
+cat(sprintf("Final Optimal Range: %.4f - %.4f\n", optimal_lower, optimal_upper))
 
 # Create long format for plotting
 plot_data_c <- event_rate_results %>%
   pivot_longer(cols = c(VGPR_rate, CRS_rate), names_to = "Outcome", values_to = "Rate") %>%
   mutate(
     Outcome = case_when(
-      Outcome == "VGPR_rate" ~ "Response (≥VGPR) - High",
-      Outcome == "CRS_rate" ~ "CRS (any Grade) - High"
+      Outcome == "VGPR_rate" ~ "Response Rate (≥VGPR)",
+      Outcome == "CRS_rate" ~ "CRS Rate (any Grade)"
     )
   )
 
@@ -356,9 +371,16 @@ panel_C <- ggplot(plot_data_c, aes(x = Cutoff, y = Rate, color = Outcome)) +
   geom_point(size = 1.5) +
   geom_vline(xintercept = optimal_lower, linetype = "dashed", color = "darkgreen", size = 0.7) +
   geom_vline(xintercept = optimal_upper, linetype = "dashed", color = "darkgreen", size = 0.7) +
-  scale_color_manual(values = c("Response (≥VGPR) - High" = "#2ecc71", "CRS (any Grade) - High" = "#e74c3c")) +
+  scale_color_manual(values = c("Response Rate (≥VGPR)" = "#2ecc71", "CRS Rate (any Grade)" = "#e74c3c")) +
   annotate("text", x = (optimal_lower + optimal_upper) / 2, y = 10,
            label = "Optimal Range", color = "darkgreen", fontface = "bold", size = 3.5) +
+  # Add cut-off value annotations
+  annotate("text", x = optimal_lower, y = 100,
+           label = sprintf("%.3f", optimal_lower),
+           color = "darkgreen", size = 3, hjust = -0.1) +
+  annotate("text", x = optimal_upper, y = 100,
+           label = sprintf("%.3f", optimal_upper),
+           color = "darkgreen", size = 3, hjust = 1.1) +
   labs(
     x = "Cavg Day 5 Cutoff (μg/mL)",
     y = "Event Rate (%)",
@@ -478,8 +500,8 @@ final_figure <- ggarrange(
 )
 
 # Save figure
-ggsave("publication_figure_4panel.png", final_figure, width = 12, height = 10, dpi = 300)
-ggsave("publication_figure_4panel.pdf", final_figure, width = 12, height = 10)
+ggsave("output/figures/publication_figure_4panel.png", final_figure, width = 12, height = 10, dpi = 300)
+ggsave("output/figures/publication_figure_4panel.pdf", final_figure, width = 12, height = 10)
 
 cat("\n==========================================================\n")
 cat("                    OUTPUT FILES\n")

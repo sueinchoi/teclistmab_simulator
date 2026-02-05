@@ -83,23 +83,23 @@ IIV_OMEGA <- list(
 cat("\nLoading data files...\n")
 
 # Patient parameters
-params <- read_csv("mrgsolve_params_full.csv", show_col_types = FALSE)
+params <- read_csv("output/tables/mrgsolve_params_full.csv", show_col_types = FALSE)
 cat("  - Loaded", nrow(params), "patients from params file\n")
 
 # Dosing data
-dosing_all <- read_csv("mrgsolve_dosing_full.csv", show_col_types = FALSE) %>%
+dosing_all <- read_csv("output/tables/mrgsolve_dosing_full.csv", show_col_types = FALSE) %>%
   filter(TIME >= 0) %>%
   arrange(ID, TIME)
 cat("  - Loaded", nrow(dosing_all), "dosing records\n")
 
 # AE data (CRS, Neuro from existing file)
-ae_crs_neuro <- read_csv("ae_pk_metrics_final.csv", show_col_types = FALSE) %>%
+ae_crs_neuro <- read_csv("output/tables/ae_pk_metrics_final.csv", show_col_types = FALSE) %>%
   select(ID, PID, CRS_any, CRS_gr2, Neuro_any, Neuro_gr2,
          Neutropenia_gr3, Thrombocytopenia_gr3, Lymphopenia_gr3, Anemia_gr2, Other_any)
 cat("  - Loaded CRS/Neuro AE data for", nrow(ae_crs_neuro), "patients\n")
 
 # Detailed AE data (from Excel extraction)
-ae_detailed <- read_csv("ae_detailed_data.csv", show_col_types = FALSE)
+ae_detailed <- read_csv("data/ae_detailed_data.csv", show_col_types = FALSE)
 cat("  - Loaded detailed AE data for", nrow(ae_detailed), "patients\n")
 
 # Merge AE data
@@ -288,12 +288,12 @@ cat("\nMerging PK results with AE data...\n")
 analysis_data <- pk_results %>%
   left_join(ae_combined, by = c("ID", "PID"))
 
-write_csv(analysis_data, "pk_ae_merged_results.csv")
-cat("Saved: pk_ae_merged_results.csv\n")
+write_csv(analysis_data, "output/tables/pk_ae_merged_results.csv")
+cat("Saved: output/tables/pk_ae_merged_results.csv\n")
 
 # Also save PK-only results
-write_csv(pk_results, "pk_simulation_results.csv")
-cat("Saved: pk_simulation_results.csv\n")
+write_csv(pk_results, "output/tables/pk_simulation_results.csv")
+cat("Saved: output/tables/pk_simulation_results.csv\n")
 
 #-------------------------------------------------------------------------------
 # Summary
